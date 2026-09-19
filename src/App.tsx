@@ -1,0 +1,223 @@
+import React, { useEffect, useState, useMemo, useCallback } from 'react';
+import { scannerEngine } from './services/scannerEngine';
+import { binanceService } from './services/binanceService';
+import { Header } from './components/Header';
+import { CandlestickChart } from './components/CandlestickChart';
+import { AlertFeed } from './components/AlertFeed';
+import { WatchlistSidebar } from './components/WatchlistSidebar';
+import { CryptoCalculator } from './components/CryptoCalculator';
+import { AlertItem, AlertTimeframe, CoinInfo, KlineInterval, MiniCandle, ScannerConfig, ScannerStatus } from './types';
+
+export const App: React.FC = () => {
+  const [config, setConfig] = useState<ScannerConfig>(scannerEngine.getConfig());
+  const [status, setStatus] = useState<ScannerStatus>(scannerEngine.getStatus());
+  const [coins, setCoins] = useState<CoinInfo[]>(scannerEngine.getCoins());
+  const [alerts, setAlerts] = useState<AlertItem[]>(scannerEngine.getAlerts());
+  const [history16Map, setHistory16Map] = useState<Map<string, MiniCandle[]>>(scannerEngine.getHistory16Map());
+
+  // Currently viewed symbol & interval on Candlestick chart
+  const [selectedSymbol, setSelectedSymbol] = useState('BTCUSDT');
+  const [selectedName, setSelectedName] = useState('Bitcoin');
+  const [chartInterval, setChartInterval] = useState<KlineInterval>('15m');
+
+  // Calculator target: captured ONLY ONCE on coin click
+  const [calculatorTarget, setCalculatorTarget] = useState<{
+    symbol: string;
+    price: number;
+    clickId: number;
+  }>({
+    symbol: 'BTCUSDT',
+    price: 0,
+    clickId: 1,
+  });
+
+  useEffect(() => {
+    // Subscribe to scanner engine state updates
+    const unsubscribe = scannerEngine.subscribe(() => {
+      setConfig(scannerEngine.getConfig());
+      setStatus(scannerEngine.getStatus());
+      setCoins(scannerEngine.getCoins());
+      setAlerts(scannerEngine.getAlerts());
+      setHistory16Map(new Map(scannerEngine.getHistory16Map()));
+    });
+
+    // Start scanner engine
+    scannerEngine.start();
+
+    return () => {
+      unsubscribe();
+      scannerEngine.stop();
+    };
+  }, []);
+
+  const handleSelectCoin = (
+    symbol: string,
+    name: string,
+    timeframeOrPrice?: AlertTimeframe | number,
+    maybePrice?: number
+  ) => {
+    setSelectedSymbol(symbol);
+    setSelectedName(name);
+
+    let tf: AlertTimeframe | undefined;
+    let price: number | undefined;
+
+    if (typeof timeframeOrPrice === 'number') {
+      price = timeframeOrPrice;
+    } else if (typeof timeframeOrPrice === 'string') {
+      tf = timeframeOrPrice;
+      price = maybePrice;
+    }
+
+    if (tf) {
+      setChartInterval(tf as KlineInterval);
+    }
+
+    // Determine snapshot price at the exact moment of selection
+    const fallbackCoin = coins.find((c) => c.binanceSymbol === symbol);
+    const resolvedPrice =
+      price && price > 0
+        ? price
+        : fallbackCoin && fallbackCoin.priceUsd > 0
+        ? fallbackCoin.priceUsd
+        : 0;
+
+    // Snapshot is set ONLY ONCE upon coin click
+    setCalculatorTarget((prev) => ({
+      symbol,
+      price: resolvedPrice,
+      clickId: prev.clickId + 1,
+    }));
+  };
+
+  // If price was 0 on click (e.g. unlisted token on first load), chart's first klines close populates it ONCE
+  const handleInitialPriceLoaded = useCallback((symbol: string, price: number) => {
+    setCalculatorTarget((prev) => {
+      if (prev.symbol === symbol && (!prev.price || prev.price === 0)) {
+        return { ...prev, price };
+      }
+      return prev;
+    });
+  }, []);
+
+  // Manual re-sync trigger for the calculator snapshot
+  const handleRefreshCalculatorPrice = useCallback(async () => {
+    try {
+      const recent = await binanceService.getKlines(selectedSymbol, '1m', 1);
+      if (recent.length > 0) {
+        setCalculatorTarget((prev) => ({
+          symbol: selectedSymbol,
+          price: recent[recent.length - 1].close,
+          clickId: prev.clickId + 1,
+        }));
+      }
+    } catch (_) {}
+  }, [selectedSymbol]);
+
+  // Keep active chart coin in sync with Top 100 list on 30s update
+  const handleLivePrice = useCallback((symbol: string, price: number) => {
+    setCoins((prev) => {
+      let changed = false;
+      const next = prev.map((c) => {
+        if (c.binanceSymbol === symbol && Math.abs(c.priceUsd - price) > 0.00000001) {
+          changed = true;
+          return { ...c, priceUsd: price };
+        }
+        return c;
+      });
+      return changed ? next : prev;
+    });
+  }, []);
+
+  const handleUpdateConfig = (newConfig: Partial<ScannerConfig>) => {
+    scannerEngine.updateConfig(newConfig);
+  };
+
+  const handleTriggerScan = () => {
+    scannerEngine.runScan();
+  };
+
+  const handleLowerThreshold = (newVal: number) => {
+    scannerEngine.updateConfig({ thresholdPercent: newVal });
+  };
+
+  const handleTimeframeChange = (tf: AlertTimeframe) => {
+    scannerEngine.updateConfig({ timeframe: tf });
+  };
+
+  // Set of alerted symbols for fast lookup in watchlist
+  const alertedSymbols = useMemo(() => {
+    return new Set(alerts.map((a) => a.symbol));
+  }, [alerts]);
+
+  return (
+    <div className="flex flex-col min-h-screen 2xl:h-screen w-full bg-[#07090e] text-slate-100 overflow-x-hidden 2xl:overflow-hidden select-none">
+      {/* Top Header */}
+      <Header
+        config={config}
+        status={status}
+        onUpdateConfig={handleUpdateConfig}
+        onTriggerScan={handleTriggerScan}
+        totalAlertsCount={alerts.length}
+      />
+
+      {/* Main Workspace */}
+      <div className="flex-1 grid grid-cols-1 xl:grid-cols-12 gap-3 p-3 min-h-0 overflow-y-auto 2xl:overflow-hidden">
+        {/* Left / Center Area: Chart (Top) & Alert Feed (Bottom) */}
+        <div className="xl:col-span-8 2xl:col-span-9 flex flex-col gap-3 min-h-0">
+          {/* Top Half: Real-time Candlestick Chart */}
+          <div className="min-h-[380px] h-[48vh] max-h-[540px]">
+            <CandlestickChart
+              symbol={selectedSymbol}
+              coinName={selectedName}
+              activeInterval={chartInterval}
+              onIntervalChange={setChartInterval}
+              onInitialPriceLoaded={handleInitialPriceLoaded}
+              onLivePrice={handleLivePrice}
+            />
+          </div>
+
+          {/* Bottom Half: Live Descending Drop Alert Feed */}
+          <div className="min-h-[320px] h-[48vh] max-h-[520px]">
+            <AlertFeed
+              alerts={alerts}
+              selectedSymbol={selectedSymbol}
+              onSelectCoin={handleSelectCoin}
+              thresholdPercent={config.thresholdPercent}
+              timeframe={config.timeframe}
+              isScanning={status.isScanning}
+              onLowerThreshold={handleLowerThreshold}
+              onTimeframeChange={handleTimeframeChange}
+            />
+          </div>
+        </div>
+
+        {/* Right Sidebar: Top 100 Watchlist & PnL Calculator in Bottom Right */}
+        <div className="xl:col-span-4 2xl:col-span-3 flex flex-col gap-3 min-h-0">
+          {/* Top: Watchlist */}
+          <div className="min-h-[360px] 2xl:flex-1 max-h-[520px] overflow-hidden flex flex-col">
+            <WatchlistSidebar
+              coins={coins}
+              selectedSymbol={selectedSymbol}
+              onSelectCoin={handleSelectCoin}
+              alertedSymbols={alertedSymbols}
+              history16Map={history16Map}
+            />
+          </div>
+
+          {/* Bottom Right: Compact Futures PnL & ROI Calculator */}
+          <div className="shrink-0">
+            <CryptoCalculator
+              selectedSymbol={calculatorTarget.symbol}
+              initialPrice={calculatorTarget.price}
+              clickId={calculatorTarget.clickId}
+              onRefreshPrice={handleRefreshCalculatorPrice}
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default App;
