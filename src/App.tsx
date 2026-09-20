@@ -7,6 +7,7 @@ import { AlertFeed } from './components/AlertFeed';
 import { WatchlistSidebar } from './components/WatchlistSidebar';
 import { CryptoCalculator } from './components/CryptoCalculator';
 import { PricePredictionCard } from './components/PricePredictionCard';
+import { Target, Calculator } from 'lucide-react';
 import { AlertItem, AlertTimeframe, CoinInfo, KlineInterval, MiniCandle, ScannerConfig, ScannerStatus } from './types';
 import { formatTabTitlePrice } from './utils/priceFormatter';
 
@@ -22,6 +23,14 @@ export const App: React.FC = () => {
   const [selectedName, setSelectedName] = useState('Bitcoin');
   const [chartInterval, setChartInterval] = useState<KlineInterval>('15m');
   const [activeCoinPrice, setActiveCoinPrice] = useState<number>(0);
+  const [bottomUtilityTab, setBottomUtilityTab] = useState<'prediction' | 'calculator'>('prediction');
+
+  // Resolved active price fallback so price is never 0 even before websocket ticks
+  const resolvedActivePrice = useMemo(() => {
+    if (activeCoinPrice > 0) return activeCoinPrice;
+    const match = coins.find((c) => c.binanceSymbol === selectedSymbol);
+    return match && match.priceUsd > 0 ? match.priceUsd : 0;
+  }, [activeCoinPrice, coins, selectedSymbol]);
 
   // Calculator target: captured ONLY ONCE on coin click
   const [calculatorTarget, setCalculatorTarget] = useState<{
@@ -228,10 +237,10 @@ export const App: React.FC = () => {
           </div>
         </div>
 
-        {/* Right Sidebar: Top 100 Watchlist & PnL Calculator in Bottom Right */}
-        <div className="xl:col-span-4 2xl:col-span-3 flex flex-col gap-3 min-h-0">
+        {/* Right Sidebar: Top 100 Watchlist & PnL Calculator / Target Prediction */}
+        <div className="xl:col-span-4 2xl:col-span-3 flex flex-col gap-3 min-h-0 overflow-y-auto pr-0.5">
           {/* Top: Watchlist */}
-          <div className="min-h-[360px] 2xl:flex-1 max-h-[520px] overflow-hidden flex flex-col">
+          <div className="min-h-[340px] 2xl:flex-1 max-h-[500px] overflow-hidden flex flex-col">
             <WatchlistSidebar
               coins={coins}
               selectedSymbol={selectedSymbol}
@@ -241,22 +250,52 @@ export const App: React.FC = () => {
             />
           </div>
 
-          {/* Bottom Right: Compact Futures PnL & ROI Calculator */}
-          <div className="shrink-0">
-            <CryptoCalculator
-              selectedSymbol={calculatorTarget.symbol}
-              initialPrice={calculatorTarget.price}
-              clickId={calculatorTarget.clickId}
-              onRefreshPrice={handleRefreshCalculatorPrice}
-            />
-          </div>
+          {/* Bottom Right: Tabbed Utility Widget (Target Prediction & Futures Calculator) */}
+          <div className="shrink-0 flex flex-col gap-2">
+            {/* Tab Selector Buttons */}
+            <div className="flex items-center bg-slate-900/90 border border-slate-800 rounded-xl p-1 gap-1 shadow-lg">
+              <button
+                onClick={() => setBottomUtilityTab('prediction')}
+                className={`flex-1 py-1.5 px-2.5 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                  bottomUtilityTab === 'prediction'
+                    ? 'bg-gradient-to-r from-amber-600 to-emerald-600 text-white shadow-md shadow-amber-900/30 ring-1 ring-amber-500/30'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+                }`}
+              >
+                <Target className="w-3.5 h-3.5 text-amber-300" />
+                <span>Target Prediction</span>
+                <span className="px-1.5 py-0.2 rounded text-[9px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-bold uppercase">
+                  Sheet
+                </span>
+              </button>
 
-          {/* Price Prediction Card with Google Sheet Sync & 2-Hour Monitoring */}
-          <div className="shrink-0">
-            <PricePredictionCard
-              selectedSymbol={selectedSymbol}
-              currentPrice={activeCoinPrice}
-            />
+              <button
+                onClick={() => setBottomUtilityTab('calculator')}
+                className={`flex-1 py-1.5 px-2.5 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                  bottomUtilityTab === 'calculator'
+                    ? 'bg-slate-700 text-white shadow-md'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+                }`}
+              >
+                <Calculator className="w-3.5 h-3.5 text-slate-300" />
+                <span>Futures Calculator</span>
+              </button>
+            </div>
+
+            {/* Active Tab View */}
+            {bottomUtilityTab === 'prediction' ? (
+              <PricePredictionCard
+                selectedSymbol={selectedSymbol}
+                currentPrice={resolvedActivePrice}
+              />
+            ) : (
+              <CryptoCalculator
+                selectedSymbol={calculatorTarget.symbol}
+                initialPrice={calculatorTarget.price}
+                clickId={calculatorTarget.clickId}
+                onRefreshPrice={handleRefreshCalculatorPrice}
+              />
+            )}
           </div>
         </div>
       </div>

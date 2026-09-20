@@ -37,15 +37,24 @@ export const PricePredictionCard: React.FC<PricePredictionCardProps> = ({
     setRecentList(predictionService.getRecentPredictions());
   }, []);
 
+  const lastSymbolRef = React.useRef(selectedSymbol);
+  const isUserEditedRef = React.useRef(false);
+
   // When selected coin changes, auto-suggest a 5% bullish target
   useEffect(() => {
-    if (currentPrice > 0) {
-      const suggested = currentPrice * 1.05;
-      setPredictedPrice(formatPriceInput(suggested));
-    } else {
-      setPredictedPrice('');
+    const isNewSymbol = selectedSymbol !== lastSymbolRef.current;
+    if (isNewSymbol) {
+      lastSymbolRef.current = selectedSymbol;
+      isUserEditedRef.current = false;
+      if (currentPrice > 0) {
+        setPredictedPrice(formatPriceInput(currentPrice * 1.05));
+      } else {
+        setPredictedPrice('');
+      }
+    } else if (!isUserEditedRef.current && currentPrice > 0 && !predictedPrice) {
+      setPredictedPrice(formatPriceInput(currentPrice * 1.05));
     }
-  }, [selectedSymbol, currentPrice]);
+  }, [selectedSymbol, currentPrice, predictedPrice]);
 
   const baseSymbol = useMemo(() => {
     return selectedSymbol.replace(/USDT?$/, '');
@@ -86,15 +95,22 @@ export const PricePredictionCard: React.FC<PricePredictionCardProps> = ({
   };
 
   const handleSubmit = async () => {
-    const pred = parseFloat(predictedPrice);
+    let pred = parseFloat(predictedPrice);
+    if ((!pred || isNaN(pred) || pred <= currentPrice) && currentPrice > 0) {
+      pred = currentPrice * 1.05;
+      setPredictedPrice(formatPriceInput(pred));
+    }
+
     if (!pred || isNaN(pred) || pred <= currentPrice) {
       setFeedback({
         type: 'error',
-        text: 'Predicted price must be greater than current price for bullish targets.',
+        text: 'Please select a coin or enter a bullish target price higher than the current price.',
       });
       setTimeout(() => setFeedback(null), 4000);
       return;
     }
+
+    const calculatedChange = ((pred - currentPrice) / currentPrice) * 100;
 
     setIsSubmitting(true);
     setFeedback(null);
@@ -103,7 +119,7 @@ export const PricePredictionCard: React.FC<PricePredictionCardProps> = ({
       symbol: baseSymbol,
       currentPrice,
       predictedPrice: pred,
-      changePercent: parseFloat(calc.changePercent.toFixed(2)),
+      changePercent: parseFloat(calculatedChange.toFixed(2)),
     });
 
     setIsSubmitting(false);
@@ -278,19 +294,28 @@ export const PricePredictionCard: React.FC<PricePredictionCardProps> = ({
           {/* Submit Button */}
           <button
             onClick={handleSubmit}
-            disabled={isSubmitting || !calc.isValid}
-            className={`w-full py-2 px-3 rounded-lg font-semibold text-xs flex items-center justify-center gap-2 transition-all shadow-md ${
+            disabled={isSubmitting}
+            className={`w-full py-2.5 px-4 rounded-xl font-bold text-xs flex items-center justify-center gap-2 transition-all shadow-lg cursor-pointer ${
               calc.isValid
-                ? 'bg-gradient-to-r from-amber-600 to-emerald-600 hover:from-amber-500 hover:to-emerald-500 text-white shadow-amber-900/30'
-                : 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700/40'
+                ? 'bg-gradient-to-r from-amber-500 via-emerald-600 to-teal-500 hover:from-amber-400 hover:to-emerald-400 text-white shadow-emerald-950/40 ring-1 ring-emerald-400/40'
+                : 'bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-white shadow-amber-950/40'
             }`}
           >
             {isSubmitting ? (
-              <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+              <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+            ) : calc.isValid ? (
+              <>
+                <TrendingUp className="w-4 h-4 text-white" />
+                <span className="text-sm font-bold tracking-wide">Log Prediction to Sheet</span>
+              </>
             ) : (
               <>
-                <TrendingUp className="w-3.5 h-3.5" />
-                <span>Log Prediction to Sheet</span>
+                <Target className="w-4 h-4 text-white" />
+                <span className="text-xs font-bold tracking-wide">
+                  {currentPrice > 0
+                    ? `Log +5% Target ($${formatPriceDisplay(currentPrice * 1.05)})`
+                    : 'Log Prediction to Sheet'}
+                </span>
               </>
             )}
           </button>
