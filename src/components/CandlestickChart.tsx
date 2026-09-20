@@ -542,38 +542,38 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
   return (
     <div className="flex flex-col h-full bg-[#0b0e14] border border-[#1e2638] rounded-xl overflow-hidden shadow-2xl">
       {/* Chart Top Header & Controls */}
-      <div className="flex flex-wrap items-center justify-between px-4 py-2.5 bg-[#121722] border-b border-[#1e2638] gap-2">
-        <div className="flex items-center gap-3 flex-wrap">
-          <div className="flex items-center gap-2">
-            <span className="text-base font-bold tracking-tight text-white">{symbol.replace('USDT', '')}</span>
-            <span className="text-xs px-1.5 py-0.5 rounded bg-[#1c2333] text-slate-400 font-medium">USDT</span>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between px-3 sm:px-4 py-2 bg-[#121722] border-b border-[#1e2638] gap-2 shrink-0">
+        <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
+          <div className="flex items-center gap-1.5 sm:gap-2">
+            <span className="text-sm sm:text-base font-bold tracking-tight text-white">{symbol.replace('USDT', '')}</span>
+            <span className="text-[10px] sm:text-xs px-1.5 py-0.5 rounded bg-[#1c2333] text-slate-400 font-medium">USDT</span>
             {binanceService.getSymbolSource(symbol) === 'binance_futures' && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-950/80 border border-purple-500/40 text-purple-300 font-mono font-semibold">
-                Binance Futures
+              <span className="text-[9px] sm:text-[10px] px-1.5 py-0.5 rounded bg-purple-950/80 border border-purple-500/40 text-purple-300 font-mono font-semibold">
+                Futures
               </span>
             )}
             {binanceService.getSymbolSource(symbol) === 'mexc' && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 font-mono font-semibold">
+              <span className="text-[9px] sm:text-[10px] px-1.5 py-0.5 rounded bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 font-mono font-semibold">
                 MEXC
               </span>
             )}
             {binanceService.getSymbolSource(symbol) === 'bitfinex' && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-teal-950/80 border border-teal-500/40 text-teal-300 font-mono font-semibold">
+              <span className="text-[9px] sm:text-[10px] px-1.5 py-0.5 rounded bg-teal-950/80 border border-teal-500/40 text-teal-300 font-mono font-semibold">
                 Bitfinex
               </span>
             )}
             {binanceService.getSymbolSource(symbol) === 'binance_spot' && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#1c2333] border border-[#2b374e] text-slate-400 font-mono">
+              <span className="text-[9px] sm:text-[10px] px-1.5 py-0.5 rounded bg-[#1c2333] border border-[#2b374e] text-slate-400 font-mono">
                 Spot
               </span>
             )}
-            <span className="text-xs text-slate-400 truncate max-w-[120px]">{coinName}</span>
+            <span className="text-xs text-slate-400 truncate max-w-[90px] sm:max-w-[120px] hidden xs:inline">{coinName}</span>
           </div>
 
           {/* Current Live Price */}
-          <div className="flex items-center gap-2 pl-3 border-l border-[#242e42]">
+          <div className="flex items-center gap-1.5 sm:gap-2 pl-2 sm:pl-3 border-l border-[#242e42]">
             <span
-              className={`font-mono text-base font-bold transition-colors duration-300 ${
+              className={`font-mono text-sm sm:text-base font-bold transition-colors duration-300 ${
                 priceDirection === 'up'
                   ? 'text-bullish'
                   : priceDirection === 'down'
@@ -586,40 +586,40 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
           </div>
 
           {/* Live Status + IST Time + Next Candle Countdown */}
-          <div className="flex items-center gap-2 pl-3 border-l border-[#242e42] flex-wrap">
+          <div className="flex items-center gap-1.5 sm:gap-2 pl-2 sm:pl-3 border-l border-[#242e42] flex-wrap">
             {/* Live Indicator */}
-            <div className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-[#161f30] border border-[#23314d]" title={isConnected ? "WebSocket Stream Connected" : "Connecting..."}>
-              <span className={`w-2 h-2 rounded-full ${isConnected ? 'bg-bullish animate-pulse' : 'bg-amber-400'}`}></span>
-              <span className={`text-[11px] font-mono font-bold ${isConnected ? 'text-emerald-400' : 'text-amber-400'}`}>
+            <div className="flex items-center gap-1 px-1.5 sm:px-2 py-0.5 rounded bg-[#161f30] border border-[#23314d]" title={isConnected ? "WebSocket Stream Connected" : "Connecting..."}>
+              <span className={`w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full ${isConnected ? 'bg-bullish animate-pulse' : 'bg-amber-400'}`}></span>
+              <span className={`text-[10px] sm:text-[11px] font-mono font-bold ${isConnected ? 'text-emerald-400' : 'text-amber-400'}`}>
                 LIVE
               </span>
             </div>
 
             {/* Current IST Time */}
-            <div className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg bg-[#0e1420] border border-[#20293d] text-[11px] font-mono" title="Current time in Indian Standard Time (IST, UTC+5:30)">
-              <span className="text-slate-500 font-semibold">IST:</span>
+            <div className="flex items-center gap-1 px-2 py-0.5 rounded-lg bg-[#0e1420] border border-[#20293d] text-[10px] sm:text-[11px] font-mono" title="Current time in Indian Standard Time (IST, UTC+5:30)">
+              <span className="text-slate-500 font-semibold hidden sm:inline">IST:</span>
               <span className="text-blue-400 font-bold tracking-wider">{istTime}</span>
             </div>
 
             {/* Next Candle Countdown */}
-            <div className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg bg-[#141b29] border border-[#24324c] text-[11px] font-mono" title={`Time remaining until current ${interval} candle closes and next candle appears`}>
-              <Clock className="w-3.5 h-3.5 text-amber-400" />
-              <span className="text-slate-400 hidden sm:inline">Next {interval} in:</span>
+            <div className="flex items-center gap-1 px-2 py-0.5 rounded-lg bg-[#141b29] border border-[#24324c] text-[10px] sm:text-[11px] font-mono" title={`Time remaining until current ${interval} candle closes and next candle appears`}>
+              <Clock className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-amber-400" />
+              <span className="text-slate-400 hidden sm:inline">Next {interval}:</span>
               <span className="text-amber-400 font-bold">{candleCountdown}</span>
             </div>
           </div>
         </div>
 
-        {/* Right side controls: Viewport Bars & Timeframe */}
-        <div className="flex items-center gap-2 flex-wrap">
+        {/* Right side controls: Viewport Bars & Timeframe (Horizontally scrollable on narrow screens) */}
+        <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5 max-w-full">
           {/* Viewport Bars (16, 24, 48, 72, 96, Custom) */}
-          <div className="flex items-center gap-1 bg-[#0b0e14] p-1 rounded-lg border border-[#1e2638]">
-            <span className="text-[10px] font-mono text-slate-400 px-1.5 hidden md:inline">View:</span>
+          <div className="flex items-center gap-0.5 bg-[#0b0e14] p-0.5 sm:p-1 rounded-lg border border-[#1e2638] shrink-0">
+            <span className="text-[10px] font-mono text-slate-400 px-1 hidden md:inline">View:</span>
             {[16, 24, 48, 72, 96].map((count) => (
               <button
                 key={count}
                 onClick={() => handleCandleCountChange(count)}
-                className={`px-2 py-0.5 text-xs font-mono font-medium rounded transition-colors ${
+                className={`px-1.5 sm:px-2 py-0.5 text-[11px] sm:text-xs font-mono font-medium rounded transition-colors ${
                   visibleCandlesCount === count
                     ? 'bg-purple-600 text-white shadow-sm font-bold'
                     : 'text-slate-400 hover:text-slate-200 hover:bg-[#192233]'
@@ -640,18 +640,18 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
                 onKeyDown={(e) => e.key === 'Enter' && handleCustomCandleCountBlur()}
                 title="Custom candles in viewport (10 - 500)"
                 placeholder="Bars"
-                className="w-12 bg-[#161c29] border border-[#2b374e] rounded px-1 py-0.5 text-xs font-mono text-purple-300 text-center focus:outline-none focus:border-purple-500"
+                className="w-10 sm:w-12 bg-[#161c29] border border-[#2b374e] rounded px-1 py-0.5 text-[11px] sm:text-xs font-mono text-purple-300 text-center focus:outline-none focus:border-purple-500"
               />
             </div>
           </div>
 
           {/* Timeframe Switcher */}
-          <div className="flex items-center gap-1 bg-[#0b0e14] p-1 rounded-lg border border-[#1e2638]">
+          <div className="flex items-center gap-0.5 bg-[#0b0e14] p-0.5 sm:p-1 rounded-lg border border-[#1e2638] shrink-0">
             {INTERVALS.map((int) => (
               <button
                 key={int.value}
                 onClick={() => handleIntervalSelect(int.value)}
-                className={`px-2.5 py-1 text-xs font-mono font-medium rounded transition-colors ${
+                className={`px-2 sm:px-2.5 py-0.5 sm:py-1 text-[11px] sm:text-xs font-mono font-medium rounded transition-colors ${
                   interval === int.value
                     ? 'bg-blue-600 text-white shadow-sm font-bold'
                     : 'text-slate-400 hover:text-slate-200 hover:bg-[#192233]'
@@ -667,7 +667,7 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
       {/* OHLC Bar with Cursor Exact Price, Date/Time and Volume (Direct DOM ref for 0ms lag) */}
       <div
         ref={ohlcBarRef}
-        className="flex items-center gap-3 px-4 py-1.5 bg-[#0e131d] border-b border-[#1a2130] text-[11px] font-mono text-slate-400 overflow-x-auto whitespace-nowrap min-h-[33px]"
+        className="flex items-center gap-3 px-3 sm:px-4 py-1 bg-[#0e131d] border-b border-[#1a2130] text-[10px] sm:text-[11px] font-mono text-slate-400 overflow-x-auto whitespace-nowrap min-h-[28px] shrink-0"
       >
         <span className="text-slate-400 italic">
           Hover anywhere on graph for exact Price, Date/Time, OHLC &amp; Volume &bull; {visibleCandlesCount} candles in view
@@ -675,7 +675,7 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
       </div>
 
       {/* Chart Canvas & CoinGecko Floating Tooltip */}
-      <div className="relative flex-1 w-full min-h-[360px]">
+      <div className="relative flex-1 w-full min-h-[220px] sm:min-h-[260px]">
         {isLoading && (
           <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-[#0b0e14]/80 backdrop-blur-sm">
             <Activity className="w-8 h-8 text-blue-500 animate-spin mb-2" />

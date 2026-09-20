@@ -198,7 +198,7 @@ function doGet(e) {
 
 /**
  * 5. Automated 15-Minute Checker
- * Iterates through all predictions where status == 'Wrong', fetches Binance candles,
+ * Iterates through all predictions where status == 'Wrong', fetches Binance candles and current price,
  * updates highest/lowest, and sets status to 'Right' if price hit or exceeded predicted price.
  */
 function checkPredictions() {
@@ -223,33 +223,42 @@ function checkPredictions() {
     if (status !== 'Wrong') continue;
     
     const symbol = String(row[0] || '').trim().toUpperCase();
-    const loggedTimeStr = String(row[1] || '');
-    let startMs = 0;
-    if (loggedTimeStr.includes('IST')) {
-      const clean = loggedTimeStr.replace(' IST', '').trim().replace(' ', 'T') + '+05:30';
-      startMs = new Date(clean).getTime();
-    } else if (loggedTimeStr.includes('UTC')) {
-      const loggedDate = new Date(loggedTimeStr.replace(' UTC', 'Z'));
-      startMs = loggedDate.getTime();
-    } else {
-      startMs = new Date(loggedTimeStr).getTime();
-    }
-    if (isNaN(startMs) || startMs <= 0) {
-      startMs = now.getTime() - 24 * 3600 * 1000;
-    }
+    const startMs = parseTimestamp(row[1], now.getTime() - 24 * 3600 * 1000);
     const endMs = now.getTime();
     
-    let currentHigh = parseFloat(row[5]) || parseFloat(row[2]) || 0;
-    let currentLow = parseFloat(row[6]) || parseFloat(row[2]) || 0;
-    const predictedPrice = parseFloat(row[3]) || 0;
+    const entryPrice = parseNum(row[2]);
+    const predictedPrice = parseNum(row[3]);
+    let currentHigh = parseNum(row[5]);
+    let currentLow = parseNum(row[6]);
     
-    // Fetch candle history from Binance between startMs and endMs
+    if (currentHigh <= 0) currentHigh = entryPrice;
+    if (currentLow <= 0) currentLow = entryPrice;
+    
+    let pair = symbol;
+    if (!pair.endsWith('USDT') && !pair.endsWith('USD')) pair = pair + 'USDT';
+    if (pair === 'SATSUSDT') pair = '1000SATSUSDT';
+    if (pair === 'BEAMUSDT') pair = 'BEAMXUSDT';
+    if (pair === 'FTMUSDT') pair = 'SUSDT';
+    if (pair === 'MKRUSDT') pair = 'SKYUSDT';
+    if (pair === 'KLAYUSDT') pair = 'KAIAUSDT';
+    
+    let isRight = false;
+    let rightTimestamp = '';
+    
+    // 1. Check real-time live ticker price
+    const livePrice = fetchCurrentPrice(pair);
+    if (livePrice > 0) {
+      if (livePrice > currentHigh) currentHigh = livePrice;
+      if (currentLow === 0 || livePrice < currentLow) currentLow = livePrice;
+      if (predictedPrice > 0 && livePrice >= predictedPrice) {
+        isRight = true;
+        rightTimestamp = nowFormatted;
+      }
+    }
+    
+    // 2. Fetch candle history (1m/5m/15m) from logged time to now
     const candles = fetchBinanceCandles(symbol, startMs, endMs);
-    
     if (candles && candles.length > 0) {
-      let isRight = false;
-      let rightTimestamp = '';
-      
       for (let c = 0; c < candles.length; c++) {
         const candle = candles[c];
         const cOpenTime = candle[0];
@@ -257,40 +266,93 @@ function checkPredictions() {
         const cLow = parseFloat(candle[3]);
         
         if (cHigh > currentHigh) currentHigh = cHigh;
-        if (cLow < currentLow || currentLow === 0) currentLow = cLow;
+        if (currentLow === 0 || cLow < currentLow) currentLow = cLow;
         
         // Bullish check: Did price reach or exceed predicted price?
-        if (cHigh >= predictedPrice && !isRight) {
+        if (predictedPrice > 0 && cHigh >= predictedPrice && !isRight) {
           isRight = true;
           rightTimestamp = Utilities.formatDate(new Date(cOpenTime), 'GMT+5:30', 'yyyy-MM-dd HH:mm:ss') + ' IST';
         }
       }
+    }
+    
+    // Update Highest Price (Col 6)
+    sheet.getRange(rowIndex, 6).setValue(currentHigh);
+    // Update Lowest Price (Col 7)
+    sheet.getRange(rowIndex, 7).setValue(currentLow);
+    // Update Last Checked At (Col 8)
+    sheet.getRange(rowIndex, 8).setValue(nowFormatted);
+    
+    if (isRight) {
+      // Status -> 'Right' (Col 9)
+      const statusCell = sheet.getRange(rowIndex, 9);
+      statusCell.setValue('Right');
+      statusCell.setFontColor('#22c55e'); // Vibrant green
+      statusCell.setFontWeight('bold');
       
-      // Update Highest Price (Col 6)
-      sheet.getRange(rowIndex, 6).setValue(currentHigh);
-      // Update Lowest Price (Col 7)
-      sheet.getRange(rowIndex, 7).setValue(currentLow);
-      // Update Last Checked At (Col 8)
-      sheet.getRange(rowIndex, 8).setValue(nowFormatted);
-      
-      if (isRight) {
-        // Status -> 'Right' (Col 9)
-        const statusCell = sheet.getRange(rowIndex, 9);
-        statusCell.setValue('Right');
-        statusCell.setFontColor('#22c55e'); // Vibrant green
-        statusCell.setFontWeight('bold');
-        
-        // Right At (Col 10)
-        sheet.getRange(rowIndex, 10).setValue(rightTimestamp || nowFormatted);
-      }
-    } else {
-      // Just update last checked time even if API had no candles
-      sheet.getRange(rowIndex, 8).setValue(nowFormatted);
+      // Right At (Col 10)
+      sheet.getRange(rowIndex, 10).setValue(rightTimestamp || nowFormatted);
     }
     
     // Small pause to avoid hitting rate limits
     Utilities.sleep(150);
   }
+}
+
+/**
+ * Helper: Safely parses numbers from cells that may contain currency symbols or commas
+ */
+function parseNum(val) {
+  if (typeof val === 'number') return val;
+  if (!val) return 0;
+  const cleaned = String(val).replace(/[^0-9.-]+/g, '');
+  const num = parseFloat(cleaned);
+  return isNaN(num) ? 0 : num;
+}
+
+/**
+ * Helper: Safely parses timestamp from Date object or IST/UTC string
+ */
+function parseTimestamp(cellVal, fallbackMs) {
+  if (!cellVal) return fallbackMs;
+  if (cellVal instanceof Date) {
+    const t = cellVal.getTime();
+    return (!isNaN(t) && t > 0) ? t : fallbackMs;
+  }
+  const str = String(cellVal).trim();
+  if (str.includes('IST')) {
+    const clean = str.replace(' IST', '').trim().replace(' ', 'T') + '+05:30';
+    const ms = new Date(clean).getTime();
+    if (!isNaN(ms) && ms > 0) return ms;
+  }
+  if (str.includes('UTC')) {
+    const clean = str.replace(' UTC', 'Z').trim().replace(' ', 'T');
+    const ms = new Date(clean).getTime();
+    if (!isNaN(ms) && ms > 0) return ms;
+  }
+  const ms = new Date(str).getTime();
+  return (!isNaN(ms) && ms > 0) ? ms : fallbackMs;
+}
+
+/**
+ * Helper: Fetches live ticker price from Binance Spot or Futures
+ */
+function fetchCurrentPrice(pair) {
+  try {
+    const res = UrlFetchApp.fetch('https://api.binance.com/api/v3/ticker/price?symbol=' + encodeURIComponent(pair), { muteHttpExceptions: true });
+    if (res.getResponseCode() === 200) {
+      const data = JSON.parse(res.getContentText());
+      if (data && data.price) return parseFloat(data.price) || 0;
+    }
+  } catch (_) {}
+  try {
+    const fRes = UrlFetchApp.fetch('https://fapi.binance.com/fapi/v1/ticker/price?symbol=' + encodeURIComponent(pair), { muteHttpExceptions: true });
+    if (fRes.getResponseCode() === 200) {
+      const fData = JSON.parse(fRes.getContentText());
+      if (fData && fData.price) return parseFloat(fData.price) || 0;
+    }
+  } catch (_) {}
+  return 0;
 }
 
 /**
@@ -309,10 +371,22 @@ function fetchBinanceCandles(rawSymbol, startTime, endTime) {
   if (pair === 'MKRUSDT') pair = 'SKYUSDT';
   if (pair === 'KLAYUSDT') pair = 'KAIAUSDT';
   
+  // Choose interval: 1m for recent windows (<16h), 5m for 16-80h, 15m for >80h
+  let interval = '1m';
+  const diffHours = (endTime - startTime) / (1000 * 60 * 60);
+  if (diffHours > 16 && diffHours <= 80) {
+    interval = '5m';
+  } else if (diffHours > 80) {
+    interval = '15m';
+  }
+  
+  // Subtract 1 minute to ensure the candle containing the exact logged second is included
+  const fetchStart = startTime - 60000;
+  
   // 1. Try Binance Spot
   try {
     const spotUrl = 'https://api.binance.com/api/v3/klines?symbol=' + encodeURIComponent(pair) +
-      '&interval=15m&startTime=' + startTime + '&endTime=' + endTime + '&limit=1000';
+      '&interval=' + interval + '&startTime=' + fetchStart + '&endTime=' + endTime + '&limit=1000';
     const spotRes = UrlFetchApp.fetch(spotUrl, { muteHttpExceptions: true });
     if (spotRes.getResponseCode() === 200) {
       const data = JSON.parse(spotRes.getContentText());
@@ -327,7 +401,7 @@ function fetchBinanceCandles(rawSymbol, startTime, endTime) {
   // 2. Fallback to Binance Futures (for XMR, HYPE, KAS, etc.)
   try {
     const fUrl = 'https://fapi.binance.com/fapi/v1/klines?symbol=' + encodeURIComponent(pair) +
-      '&interval=15m&startTime=' + startTime + '&endTime=' + endTime + '&limit=1000';
+      '&interval=' + interval + '&startTime=' + fetchStart + '&endTime=' + endTime + '&limit=1000';
     const fRes = UrlFetchApp.fetch(fUrl, { muteHttpExceptions: true });
     if (fRes.getResponseCode() === 200) {
       const fData = JSON.parse(fRes.getContentText());

@@ -7,7 +7,7 @@ import { AlertFeed } from './components/AlertFeed';
 import { WatchlistSidebar } from './components/WatchlistSidebar';
 import { CryptoCalculator } from './components/CryptoCalculator';
 import { PricePredictionCard } from './components/PricePredictionCard';
-import { Target, Calculator } from 'lucide-react';
+import { Target, Calculator, BarChart2, BellRing, ListFilter, LayoutGrid } from 'lucide-react';
 import { AlertItem, AlertTimeframe, CoinInfo, KlineInterval, MiniCandle, ScannerConfig, ScannerStatus } from './types';
 import { formatTabTitlePrice } from './utils/priceFormatter';
 
@@ -24,6 +24,7 @@ export const App: React.FC = () => {
   const [chartInterval, setChartInterval] = useState<KlineInterval>('15m');
   const [activeCoinPrice, setActiveCoinPrice] = useState<number>(0);
   const [bottomUtilityTab, setBottomUtilityTab] = useState<'prediction' | 'calculator'>('prediction');
+  const [mobileTab, setMobileTab] = useState<'chart' | 'alerts' | 'watchlist' | 'utility' | 'all'>('chart');
 
   // Resolved active price fallback so price is never 0 even before websocket ticks
   const resolvedActivePrice = useMemo(() => {
@@ -70,6 +71,11 @@ export const App: React.FC = () => {
   ) => {
     setSelectedSymbol(symbol);
     setSelectedName(name);
+
+    // On mobile screens, automatically show chart when selecting a coin
+    if (typeof window !== 'undefined' && window.innerWidth < 1280 && mobileTab !== 'all') {
+      setMobileTab('chart');
+    }
 
     let tf: AlertTimeframe | undefined;
     let price: number | undefined;
@@ -196,7 +202,7 @@ export const App: React.FC = () => {
   }, [alerts]);
 
   return (
-    <div className="flex flex-col min-h-screen 2xl:h-screen w-full bg-[#07090e] text-slate-100 overflow-x-hidden 2xl:overflow-hidden select-none">
+    <div className="flex flex-col min-h-screen xl:h-screen w-full bg-[#07090e] text-slate-100 overflow-x-hidden xl:overflow-hidden select-none">
       {/* Top Header */}
       <Header
         config={config}
@@ -206,12 +212,98 @@ export const App: React.FC = () => {
         totalAlertsCount={alerts.length}
       />
 
+      {/* Mobile & Tablet Navigation Tab Bar (Hidden on desktop/laptop xl+) */}
+      <div className="xl:hidden flex items-center bg-[#10141d] border-b border-[#1e2638] px-2 py-1.5 gap-1 overflow-x-auto no-scrollbar shrink-0">
+        <button
+          onClick={() => setMobileTab('chart')}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono font-medium transition-all shrink-0 ${
+            mobileTab === 'chart'
+              ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30 font-bold'
+              : 'text-slate-400 hover:text-slate-200 hover:bg-[#161c28]'
+          }`}
+        >
+          <BarChart2 className="w-3.5 h-3.5" />
+          <span>Chart</span>
+        </button>
+
+        <button
+          onClick={() => setMobileTab('alerts')}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono font-medium transition-all shrink-0 ${
+            mobileTab === 'alerts'
+              ? 'bg-rose-600 text-white shadow-md shadow-rose-600/30 font-bold'
+              : 'text-slate-400 hover:text-slate-200 hover:bg-[#161c28]'
+          }`}
+        >
+          <BellRing className="w-3.5 h-3.5" />
+          <span>Alerts</span>
+          {alerts.length > 0 && (
+            <span
+              className={`px-1.5 py-0.2 rounded text-[10px] font-bold ${
+                mobileTab === 'alerts' ? 'bg-black/40 text-rose-200' : 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
+              }`}
+            >
+              {alerts.length}
+            </span>
+          )}
+        </button>
+
+        <button
+          onClick={() => setMobileTab('watchlist')}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono font-medium transition-all shrink-0 ${
+            mobileTab === 'watchlist'
+              ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30 font-bold'
+              : 'text-slate-400 hover:text-slate-200 hover:bg-[#161c28]'
+          }`}
+        >
+          <ListFilter className="w-3.5 h-3.5" />
+          <span>Watchlist</span>
+        </button>
+
+        <button
+          onClick={() => setMobileTab('utility')}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono font-medium transition-all shrink-0 ${
+            mobileTab === 'utility'
+              ? 'bg-amber-600 text-white shadow-md shadow-amber-600/30 font-bold'
+              : 'text-slate-400 hover:text-slate-200 hover:bg-[#161c28]'
+          }`}
+        >
+          <Target className="w-3.5 h-3.5 text-amber-300" />
+          <span>Predict / Calc</span>
+        </button>
+
+        <button
+          onClick={() => setMobileTab('all')}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono font-medium transition-all shrink-0 ${
+            mobileTab === 'all'
+              ? 'bg-slate-700 text-white shadow-md font-bold'
+              : 'text-slate-400 hover:text-slate-200 hover:bg-[#161c28]'
+          }`}
+        >
+          <LayoutGrid className="w-3.5 h-3.5" />
+          <span>All Views</span>
+        </button>
+      </div>
+
       {/* Main Workspace */}
-      <div className="flex-1 grid grid-cols-1 xl:grid-cols-12 gap-3 p-3 min-h-0 overflow-y-auto 2xl:overflow-hidden">
+      <div className="flex-1 grid grid-cols-1 xl:grid-cols-12 gap-2 sm:gap-2.5 p-2 sm:p-2.5 min-h-0 xl:overflow-hidden overflow-y-auto">
         {/* Left / Center Area: Chart (Top) & Alert Feed (Bottom) */}
-        <div className="xl:col-span-8 2xl:col-span-9 flex flex-col gap-3 min-h-0">
+        <div
+          className={`xl:col-span-8 2xl:col-span-9 flex flex-col gap-2 sm:gap-2.5 min-h-0 h-full ${
+            mobileTab === 'chart' || mobileTab === 'alerts' || mobileTab === 'all'
+              ? 'flex'
+              : 'hidden xl:flex'
+          }`}
+        >
           {/* Top Half: Real-time Candlestick Chart */}
-          <div className="min-h-[380px] h-[48vh] max-h-[540px]">
+          <div
+            className={`flex-[1.15] min-h-[300px] xl:min-h-0 ${
+              mobileTab === 'chart'
+                ? 'h-[calc(100vh-130px)] min-h-[440px]'
+                : mobileTab === 'all'
+                ? 'h-[48vh] min-h-[340px]'
+                : 'hidden xl:flex xl:flex-col'
+            }`}
+          >
             <CandlestickChart
               symbol={selectedSymbol}
               coinName={selectedName}
@@ -223,7 +315,15 @@ export const App: React.FC = () => {
           </div>
 
           {/* Bottom Half: Live Descending Drop Alert Feed */}
-          <div className="min-h-[320px] h-[48vh] max-h-[520px]">
+          <div
+            className={`flex-1 min-h-[250px] xl:min-h-0 ${
+              mobileTab === 'alerts'
+                ? 'h-[calc(100vh-130px)] min-h-[440px]'
+                : mobileTab === 'all'
+                ? 'h-[46vh] min-h-[300px]'
+                : 'hidden xl:flex xl:flex-col'
+            }`}
+          >
             <AlertFeed
               alerts={alerts}
               selectedSymbol={selectedSymbol}
@@ -238,9 +338,23 @@ export const App: React.FC = () => {
         </div>
 
         {/* Right Sidebar: Top 100 Watchlist & PnL Calculator / Target Prediction */}
-        <div className="xl:col-span-4 2xl:col-span-3 flex flex-col gap-3 min-h-0 overflow-y-auto pr-0.5">
+        <div
+          className={`xl:col-span-4 2xl:col-span-3 flex flex-col gap-2 sm:gap-2.5 min-h-0 h-full pr-0.5 xl:overflow-hidden ${
+            mobileTab === 'watchlist' || mobileTab === 'utility' || mobileTab === 'all'
+              ? 'flex'
+              : 'hidden xl:flex'
+          }`}
+        >
           {/* Top: Watchlist */}
-          <div className="min-h-[340px] 2xl:flex-1 max-h-[500px] overflow-hidden flex flex-col">
+          <div
+            className={`flex-1 min-h-[220px] xl:min-h-0 overflow-hidden flex flex-col ${
+              mobileTab === 'watchlist'
+                ? 'h-[calc(100vh-130px)] min-h-[440px]'
+                : mobileTab === 'all'
+                ? 'h-[42vh] min-h-[300px]'
+                : 'hidden xl:flex'
+            }`}
+          >
             <WatchlistSidebar
               coins={coins}
               selectedSymbol={selectedSymbol}
@@ -251,9 +365,17 @@ export const App: React.FC = () => {
           </div>
 
           {/* Bottom Right: Tabbed Utility Widget (Target Prediction & Futures Calculator) */}
-          <div className="shrink-0 flex flex-col gap-2">
+          <div
+            className={`shrink-0 flex flex-col gap-1.5 ${
+              mobileTab === 'utility'
+                ? 'min-h-[440px]'
+                : mobileTab === 'all'
+                ? ''
+                : 'hidden xl:flex'
+            }`}
+          >
             {/* Tab Selector Buttons */}
-            <div className="flex items-center bg-slate-900/90 border border-slate-800 rounded-xl p-1 gap-1 shadow-lg">
+            <div className="flex items-center bg-slate-900/90 border border-slate-800 rounded-xl p-1 gap-1 shadow-lg shrink-0">
               <button
                 onClick={() => setBottomUtilityTab('prediction')}
                 className={`flex-1 py-1.5 px-2.5 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
