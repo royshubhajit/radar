@@ -76,3 +76,35 @@ export function formatPriceInput(val: number | string | undefined | null): strin
 export function formatPrice6(val: number | string | undefined | null): string {
   return formatCryptoPrice(val, { includeCommas: true, includeDollar: true });
 }
+
+/**
+ * Browser Tab Title Formatter (Binance style)
+ * e.g. "81,272.00 | BTC", "112.00 | SOL", "0.00001850 | PEPE"
+ * Preserves precision for sub-micro coins like PEPE without scientific notation.
+ */
+export function formatTabTitlePrice(val: number | string | undefined | null): string {
+  if (val === undefined || val === null || val === '') return '';
+  const num = typeof val === 'string' ? parseFloat(val) : val;
+  if (isNaN(num) || num <= 0) return '';
+
+  if (num >= 1000) {
+    return num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+  if (num >= 100) {
+    return num.toFixed(2);
+  }
+  if (num >= 1) {
+    const s = num.toFixed(4);
+    return s.replace(/(\.\d\d[1-9]*)0+$/, '$1').replace(/(\.\d\d)00$/, '$1');
+  }
+  if (num >= 0.0001) {
+    const s = num.toFixed(6);
+    return s.replace(/(\.\d{4}[1-9]*)0+$/, '$1');
+  }
+  // Sub-micro coins (e.g. PEPE, SHIB, BONK)
+  const s = num.toFixed(8);
+  if (s === '0.00000000') {
+    return num.toFixed(10).replace(/0+$/, '');
+  }
+  return s;
+}

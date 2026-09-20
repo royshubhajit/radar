@@ -198,8 +198,12 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
         value: candle.volume,
         color: isBullish ? 'rgba(16, 185, 129, 0.4)' : 'rgba(244, 63, 94, 0.4)',
       });
+
+      if (candle.close > 0) {
+        onLivePrice?.(symbol, candle.close);
+      }
     }
-  }, []);
+  }, [symbol, onLivePrice]);
 
   const { isConnected, currentPrice, priceDirection } = useBinanceWebSocket({
     symbol,
@@ -488,6 +492,7 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
       const lastPrice = candles[candles.length - 1].close;
       setLastClosePrice(lastPrice);
       onInitialPriceLoaded?.(symbol, lastPrice);
+      onLivePrice?.(symbol, lastPrice);
       candleSeries.applyOptions({
         priceFormat: getPriceFormatOptions(lastPrice),
       });

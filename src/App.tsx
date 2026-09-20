@@ -7,6 +7,7 @@ import { AlertFeed } from './components/AlertFeed';
 import { WatchlistSidebar } from './components/WatchlistSidebar';
 import { CryptoCalculator } from './components/CryptoCalculator';
 import { AlertItem, AlertTimeframe, CoinInfo, KlineInterval, MiniCandle, ScannerConfig, ScannerStatus } from './types';
+import { formatTabTitlePrice } from './utils/priceFormatter';
 
 export const App: React.FC = () => {
   const [config, setConfig] = useState<ScannerConfig>(scannerEngine.getConfig());
@@ -19,6 +20,7 @@ export const App: React.FC = () => {
   const [selectedSymbol, setSelectedSymbol] = useState('BTCUSDT');
   const [selectedName, setSelectedName] = useState('Bitcoin');
   const [chartInterval, setChartInterval] = useState<KlineInterval>('15m');
+  const [activeCoinPrice, setActiveCoinPrice] = useState<number>(0);
 
   // Calculator target: captured ONLY ONCE on coin click
   const [calculatorTarget, setCalculatorTarget] = useState<{
@@ -82,6 +84,10 @@ export const App: React.FC = () => {
         ? fallbackCoin.priceUsd
         : 0;
 
+    if (resolvedPrice && resolvedPrice > 0) {
+      setActiveCoinPrice(resolvedPrice);
+    }
+
     // Snapshot is set ONLY ONCE upon coin click
     setCalculatorTarget((prev) => ({
       symbol,
@@ -92,30 +98,38 @@ export const App: React.FC = () => {
 
   // If price was 0 on click (e.g. unlisted token on first load), chart's first klines close populates it ONCE
   const handleInitialPriceLoaded = useCallback((symbol: string, price: number) => {
+    if (symbol === selectedSymbol && price > 0) {
+      setActiveCoinPrice(price);
+    }
     setCalculatorTarget((prev) => {
       if (prev.symbol === symbol && (!prev.price || prev.price === 0)) {
         return { ...prev, price };
       }
       return prev;
     });
-  }, []);
+  }, [selectedSymbol]);
 
   // Manual re-sync trigger for the calculator snapshot
   const handleRefreshCalculatorPrice = useCallback(async () => {
     try {
       const recent = await binanceService.getKlines(selectedSymbol, '1m', 1);
       if (recent.length > 0) {
+        const latestPrice = recent[recent.length - 1].close;
+        setActiveCoinPrice(latestPrice);
         setCalculatorTarget((prev) => ({
           symbol: selectedSymbol,
-          price: recent[recent.length - 1].close,
+          price: latestPrice,
           clickId: prev.clickId + 1,
         }));
       }
     } catch (_) {}
   }, [selectedSymbol]);
 
-  // Keep active chart coin in sync with Top 100 list on 30s update
+  // Keep active chart coin in sync with Top 100 list on 30s update and live WS ticks
   const handleLivePrice = useCallback((symbol: string, price: number) => {
+    if (symbol === selectedSymbol && price > 0) {
+      setActiveCoinPrice(price);
+    }
     setCoins((prev) => {
       let changed = false;
       const next = prev.map((c) => {
@@ -127,7 +141,28 @@ export const App: React.FC = () => {
       });
       return changed ? next : prev;
     });
-  }, []);
+  }, [selectedSymbol]);
+
+  // Sync activeCoinPrice immediately from Watchlist when available
+  useEffect(() => {
+    if (!activeCoinPrice || activeCoinPrice === 0) {
+      const match = coins.find((c) => c.binanceSymbol === selectedSymbol);
+      if (match && match.priceUsd > 0) {
+        setActiveCoinPrice(match.priceUsd);
+      }
+    }
+  }, [coins, selectedSymbol, activeCoinPrice]);
+
+  // Dynamically update browser tab title (Binance style: e.g. "81,272.00 | BTC", "112.00 | SOL", "0.00001850 | PEPE")
+  useEffect(() => {
+    const cleanSym = selectedSymbol.replace('USDT', '');
+    if (activeCoinPrice && activeCoinPrice > 0) {
+      const formatted = formatTabTitlePrice(activeCoinPrice);
+      document.title = `${formatted} | ${cleanSym}`;
+    } else {
+      document.title = `${cleanSym} | DropRadar`;
+    }
+  }, [activeCoinPrice, selectedSymbol]);
 
   const handleUpdateConfig = (newConfig: Partial<ScannerConfig>) => {
     scannerEngine.updateConfig(newConfig);
