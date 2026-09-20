@@ -46,4 +46,10 @@ Follow these simple steps to connect your Google Sheet to the Crypto Radar site 
 4. Paste your **Web App URL** and your **Google Sheet URL**.
 5. Click **Save Settings**.
 
-You're done! Now whenever you click on any coin and log a prediction, it instantly writes to your Google Sheet, and Google's cloud will automatically monitor and evaluate the price every 15 minutes!
+---
+
+### Step 6: Verify Live Prices & Special Coins (Optional)
+To verify that all coins (including Monero XMR, Hyperliquid HYPE, Kaspa KAS, and WhiteBIT WBT) are fetching the correct real-time prices and 5-minute candles:
+1. In the Apps Script editor, select **`testConnection`** from the function dropdown.
+2. Click **Run** and open the **Execution log**.
+3. You will see live prices for BTC, XMR (confirming real active market price and NOT the delisted Binance Spot $118 price), HYPE, and WBT, along with verified 5-minute candles!

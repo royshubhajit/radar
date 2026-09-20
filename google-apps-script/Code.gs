@@ -29,6 +29,79 @@ const HEADERS = [
   'Notes'             // Col 12: 'Active', 'Target Reached', '72h Expired', or 'Error: ...'
 ];
 
+// Symbol mapping for rebrands and trading pairs
+const SYMBOL_MAPPINGS = {
+  'SATS': '1000SATSUSDT',
+  '1000SATS': '1000SATSUSDT',
+  'BEAM': 'BEAMXUSDT',
+  'BEAMX': 'BEAMXUSDT',
+  'FTM': 'SUSDT',
+  'MKR': 'SKYUSDT',
+  'KLAY': 'KAIAUSDT',
+};
+
+// Delisted on Binance Spot: Binance Spot ticker/price endpoint returns stale frozen 2024 prices (e.g. XMR ~$118)
+// These MUST be excluded from Binance Spot queries!
+const DELISTED_SPOT_SYMBOLS = new Set([
+  'XMRUSDT',
+  'XMRBTC',
+  'XMRETH',
+  'XMRBUSD'
+]);
+
+// Routed to Binance USDⓈ-M Futures (fapi.binance.com) where active trading continues with real market price
+const FUTURES_PRIORITY_SYMBOLS = new Set([
+  'XMRUSDT',
+  'HYPEUSDT',
+  'KASUSDT',
+  '1000SATSUSDT'
+]);
+
+// Routed to MEXC (api.mexc.com)
+const MEXC_PRIORITY_SYMBOLS = new Set([
+  'WBTUSDT',
+  'LEOUSDT'
+]);
+
+/**
+ * Normalizes symbols (e.g., 'XMR' -> 'XMRUSDT', 'SATS' -> '1000SATSUSDT')
+ */
+function normalizeSymbol(symbol) {
+  let sym = String(symbol || '').trim().toUpperCase();
+  if (!sym) return '';
+  
+  if (SYMBOL_MAPPINGS[sym]) {
+    return SYMBOL_MAPPINGS[sym];
+  }
+  
+  const base = sym.replace(/USDT$/, '').replace(/USD$/, '');
+  if (SYMBOL_MAPPINGS[base]) {
+    return SYMBOL_MAPPINGS[base];
+  }
+  
+  if (!sym.endsWith('USDT') && !sym.endsWith('USD')) {
+    sym = sym + 'USDT';
+  }
+  
+  return sym;
+}
+
+/**
+ * Validates whether kline data is fresh and non-empty.
+ * Rejects stale/delisted historical data older than 48 hours.
+ */
+function isValidCandleData(data, nowMs) {
+  if (!Array.isArray(data) || data.length === 0) return false;
+  const lastCandle = data[data.length - 1];
+  if (!lastCandle || !Array.isArray(lastCandle) || !lastCandle[0]) return false;
+  const lastCandleTime = lastCandle[0]; // open time in ms
+  const twoDaysAgo = (nowMs || new Date().getTime()) - (48 * 60 * 60 * 1000);
+  if (lastCandleTime < twoDaysAgo) {
+    return false; // Stale history from months/years ago
+  }
+  return true;
+}
+
 /**
  * 1. Initial Setup & Migration: Formats sheet with 12 headers and sets column styling
  * Run this function once from the script editor!
@@ -292,9 +365,10 @@ function checkPredictions() {
     const row = values[i];
     const rowIndex = i + 2;
     
-    const symbol = String(row[0] || '').trim().toUpperCase();
-    if (!symbol) continue;
+    const rawSymbol = String(row[0] || '').trim().toUpperCase();
+    if (!rawSymbol) continue;
     
+    const pair = normalizeSymbol(rawSymbol);
     const status = String(row[8] || '').trim();
     let checking = String(row[10] || '').trim();
     
@@ -319,7 +393,7 @@ function checkPredictions() {
       values[i][7] = nowFormatted; // Update last checked time
       expiredCount++;
       newlyExpiredRows.push(rowIndex);
-      Logger.log('[Row ' + rowIndex + '] ' + symbol + ': 72 hours crossed (' + ageHours.toFixed(1) + 'h) -> Checking marked No.');
+      Logger.log('[Row ' + rowIndex + '] ' + rawSymbol + ': 72 hours crossed (' + ageHours.toFixed(1) + 'h) -> Checking marked No.');
       continue;
     }
     
@@ -330,34 +404,29 @@ function checkPredictions() {
     let currentHigh = parseNum(row[5]);
     let currentLow = parseNum(row[6]);
     
-    if (currentHigh <= 0) currentHigh = entryPrice;
-    if (currentLow <= 0) currentLow = entryPrice;
-    
-    let pair = symbol;
-    if (!pair.endsWith('USDT') && !pair.endsWith('USD')) pair = pair + 'USDT';
-    if (pair === 'SATSUSDT') pair = '1000SATSUSDT';
-    if (pair === 'BEAMUSDT') pair = 'BEAMXUSDT';
-    if (pair === 'FTMUSDT') pair = 'SUSDT';
-    if (pair === 'MKRUSDT') pair = 'SKYUSDT';
-    if (pair === 'KLAYUSDT') pair = 'KAIAUSDT';
-    
     let isRight = false;
     let rightTimestamp = '';
     let errorMessage = '';
     
-    // 1. Check live ticker price from bulk map (instant, 0ms)
+    // 1. Get live ticker price from bulk multi-exchange map
     let livePrice = liveTickersMap.get(pair) || 0;
     if (livePrice === 0) {
-      livePrice = liveTickersMap.get(symbol) || 0;
+      livePrice = liveTickersMap.get(rawSymbol) || 0;
     }
     if (livePrice === 0) {
-      // Fallback: individual query if not in bulk map
+      // Fallback: targeted individual query
       livePrice = fetchCurrentPrice(pair);
     }
     
+    // Seed true window extremes starting from entry price
+    let calcHigh = entryPrice > 0 ? entryPrice : 0;
+    let calcLow = entryPrice > 0 ? entryPrice : 0;
+    
     if (livePrice > 0) {
-      if (livePrice > currentHigh) currentHigh = livePrice;
-      if (currentLow <= 0 || livePrice < currentLow) currentLow = livePrice;
+      if (calcHigh === 0 || livePrice > calcHigh) calcHigh = livePrice;
+      if (calcLow === 0 || livePrice < calcLow) calcLow = livePrice;
+      
+      // Live price touch target check
       if (predictedPrice > 0 && livePrice >= predictedPrice) {
         isRight = true;
         rightTimestamp = nowFormatted;
@@ -375,10 +444,10 @@ function checkPredictions() {
           const cLow = parseFloat(candle[3]);
           
           if (!isNaN(cHigh) && cHigh > 0) {
-            if (cHigh > currentHigh) currentHigh = cHigh;
+            if (calcHigh === 0 || cHigh > calcHigh) calcHigh = cHigh;
           }
           if (!isNaN(cLow) && cLow > 0) {
-            if (currentLow <= 0 || cLow < currentLow) currentLow = cLow;
+            if (calcLow === 0 || cLow < calcLow) calcLow = cLow;
           }
           
           // Bullish check: Did candle high touch or exceed predicted price?
@@ -389,10 +458,25 @@ function checkPredictions() {
             rightTimestamp = Utilities.formatDate(new Date(candleEndTimeMs), 'GMT+5:30', 'yyyy-MM-dd HH:mm:ss') + ' IST';
           }
         }
+        
+        // Auto-heal: Set highest and lowest directly from true continuous 5m candles + entry price
+        currentHigh = calcHigh;
+        currentLow = calcLow;
+      } else {
+        // Candles temporarily unavailable: apply live price with anti-corruption guard
+        if (livePrice > 0) {
+          if (currentHigh <= 0 || livePrice > currentHigh) currentHigh = livePrice;
+          // Guard: do not retain an absurdly low price (e.g. 118 when entry was 280)
+          if (currentLow <= 0 || (entryPrice > 0 && currentLow < entryPrice * 0.4)) {
+            currentLow = livePrice;
+          } else if (livePrice < currentLow) {
+            currentLow = livePrice;
+          }
+        }
       }
     } catch (err) {
       errorMessage = 'Error: ' + (err.message || err.toString());
-      Logger.log('[Row ' + rowIndex + '] ' + symbol + ' candle fetch error: ' + errorMessage);
+      Logger.log('[Row ' + rowIndex + '] ' + rawSymbol + ' candle fetch error: ' + errorMessage);
     }
     
     // Update row fields in memory
@@ -407,7 +491,7 @@ function checkPredictions() {
       values[i][11] = 'Target Reached';
       rightCount++;
       newlyRightRows.push(rowIndex);
-      Logger.log('[Row ' + rowIndex + '] ' + symbol + ' TARGET HIT! Right at ' + (rightTimestamp || nowFormatted));
+      Logger.log('[Row ' + rowIndex + '] ' + rawSymbol + ' TARGET HIT! Right at ' + (rightTimestamp || nowFormatted) + ' (High: $' + currentHigh + ')');
     } else {
       values[i][8] = 'Wrong';
       values[i][10] = 'Yes';
@@ -438,13 +522,15 @@ function checkPredictions() {
 }
 
 /**
- * Bulk-fetches all current ticker prices in ONE single HTTP request
- * Bypasses Google Cloud US IP geo-restrictions via Binance Vision / MEXC
+ * Bulk-fetches all current ticker prices across:
+ * 1. Binance Spot (Binance Vision cluster - excludes delisted XMR)
+ * 2. Binance Futures (fapi.binance.com - gets real active XMR, HYPE, KAS)
+ * 3. MEXC (api.mexc.com - gets WBT, LEO, and any alternative tokens)
  */
 function fetchAllLiveTickers() {
   const map = new Map();
   
-  // 1. Try Binance Vision (Non-geo-restricted public cluster)
+  // 1. Binance Vision Spot (Non-geo-restricted public cluster)
   try {
     const res = UrlFetchApp.fetch('https://data-api.binance.vision/api/v3/ticker/price', { muteHttpExceptions: true });
     if (res.getResponseCode() === 200) {
@@ -452,16 +538,41 @@ function fetchAllLiveTickers() {
       if (Array.isArray(list)) {
         for (let i = 0; i < list.length; i++) {
           const item = list[i];
-          if (item.symbol && item.price) {
+          if (item && item.symbol && item.price) {
+            // CRITICAL: Skip delisted spot pairs so stale 2024 price never enters the map
+            if (DELISTED_SPOT_SYMBOLS.has(item.symbol)) continue;
             map.set(item.symbol, parseFloat(item.price) || 0);
           }
         }
-        return map;
       }
     }
-  } catch (_) {}
+  } catch (e) {
+    Logger.log('Binance Vision ticker warning: ' + e);
+  }
   
-  // 2. Fallback: MEXC global ticker list
+  // 2. Binance USDⓈ-M Futures (Real active prices for XMR, HYPE, KAS, etc.)
+  try {
+    const fRes = UrlFetchApp.fetch('https://fapi.binance.com/fapi/v1/ticker/price', { muteHttpExceptions: true });
+    if (fRes.getResponseCode() === 200) {
+      const fList = JSON.parse(fRes.getContentText());
+      if (Array.isArray(fList)) {
+        for (let i = 0; i < fList.length; i++) {
+          const fItem = fList[i];
+          if (fItem && fItem.symbol && fItem.price) {
+            const p = parseFloat(fItem.price) || 0;
+            // Overwrite if futures priority (XMR, HYPE, KAS) or if not yet in map
+            if (FUTURES_PRIORITY_SYMBOLS.has(fItem.symbol) || !map.has(fItem.symbol)) {
+              map.set(fItem.symbol, p);
+            }
+          }
+        }
+      }
+    }
+  } catch (e) {
+    Logger.log('Binance Futures ticker warning: ' + e);
+  }
+
+  // 3. MEXC Spot (Prices for WBT, LEO, etc.)
   try {
     const mRes = UrlFetchApp.fetch('https://api.mexc.com/api/v3/ticker/price', { muteHttpExceptions: true });
     if (mRes.getResponseCode() === 200) {
@@ -469,24 +580,33 @@ function fetchAllLiveTickers() {
       if (Array.isArray(mList)) {
         for (let i = 0; i < mList.length; i++) {
           const mItem = mList[i];
-          if (mItem.symbol && mItem.price) {
-            map.set(mItem.symbol, parseFloat(mItem.price) || 0);
+          if (mItem && mItem.symbol && mItem.price) {
+            const p = parseFloat(mItem.price) || 0;
+            if (MEXC_PRIORITY_SYMBOLS.has(mItem.symbol) || !map.has(mItem.symbol)) {
+              map.set(mItem.symbol, p);
+            }
           }
         }
-        return map;
       }
     }
-  } catch (_) {}
+  } catch (e) {
+    Logger.log('MEXC ticker warning: ' + e);
+  }
   
   return map;
 }
 
 /**
- * Fetches 5-MINUTE CANDLES exclusively (bypasses Google Cloud US IP geo-restrictions)
- * 72 hours = 864 candles (under the 1,000 candle single query limit)
+ * Fetches 5-MINUTE CANDLES with intelligent multi-exchange routing:
+ * - XMR, HYPE, KAS -> Binance Futures & MEXC
+ * - WBT, LEO -> MEXC & Bitfinex
+ * - Standard pairs -> Binance Vision Spot -> MEXC -> Binance Futures -> Mirrors
+ * Validates freshness to discard any ancient delisted data.
  */
 function fetchFiveMinuteCandles(pair, startTime, endTime) {
+  const norm = normalizeSymbol(pair);
   const interval = '5m';
+  const nowMs = new Date().getTime();
   
   // 1-minute buffer to ensure candle containing exact logged second is included
   const fetchStart = startTime - 60000;
@@ -495,69 +615,114 @@ function fetchFiveMinuteCandles(pair, startTime, endTime) {
     fetchEnd = fetchStart + 300000; // 5 min forward
   }
   
-  // 1. Try Binance Vision (Official Binance public endpoint with NO geo-restrictions)
+  // ROUTE A: Futures Priority (XMR, HYPE, KAS)
+  if (FUTURES_PRIORITY_SYMBOLS.has(norm)) {
+    // A1. Binance Futures (fapi.binance.com)
+    try {
+      const fUrl = 'https://fapi.binance.com/fapi/v1/klines?symbol=' + encodeURIComponent(norm) +
+        '&interval=' + interval + '&startTime=' + fetchStart + '&endTime=' + fetchEnd + '&limit=1000';
+      const fRes = UrlFetchApp.fetch(fUrl, { muteHttpExceptions: true });
+      if (fRes.getResponseCode() === 200) {
+        const fData = JSON.parse(fRes.getContentText());
+        if (isValidCandleData(fData, nowMs)) return fData;
+      }
+    } catch (_) {}
+    
+    // A2. MEXC Global
+    try {
+      const mexcUrl = 'https://api.mexc.com/api/v3/klines?symbol=' + encodeURIComponent(norm) +
+        '&interval=' + interval + '&startTime=' + fetchStart + '&endTime=' + fetchEnd + '&limit=1000';
+      const mexcRes = UrlFetchApp.fetch(mexcUrl, { muteHttpExceptions: true });
+      if (mexcRes.getResponseCode() === 200) {
+        const mData = JSON.parse(mexcRes.getContentText());
+        if (isValidCandleData(mData, nowMs)) return mData;
+      }
+    } catch (_) {}
+    
+    return [];
+  }
+  
+  // ROUTE B: MEXC Priority (WBT, LEO)
+  if (MEXC_PRIORITY_SYMBOLS.has(norm)) {
+    // B1. MEXC Global
+    try {
+      const mexcUrl = 'https://api.mexc.com/api/v3/klines?symbol=' + encodeURIComponent(norm) +
+        '&interval=' + interval + '&startTime=' + fetchStart + '&endTime=' + fetchEnd + '&limit=1000';
+      const mexcRes = UrlFetchApp.fetch(mexcUrl, { muteHttpExceptions: true });
+      if (mexcRes.getResponseCode() === 200) {
+        const mData = JSON.parse(mexcRes.getContentText());
+        if (isValidCandleData(mData, nowMs)) return mData;
+      }
+    } catch (_) {}
+    
+    // B2. If LEOUSDT, try Bitfinex
+    if (norm === 'LEOUSDT') {
+      try {
+        const bfxUrl = 'https://api-pub.bitfinex.com/v2/candles/trade:5m:tLEOUSD/hist?start=' + fetchStart + '&end=' + fetchEnd + '&limit=1000';
+        const bfxRes = UrlFetchApp.fetch(bfxUrl, { muteHttpExceptions: true });
+        if (bfxRes.getResponseCode() === 200) {
+          const bData = JSON.parse(bfxRes.getContentText());
+          if (Array.isArray(bData) && bData.length > 0) {
+            const reversed = bData.slice().reverse();
+            const mapped = reversed.map(function(c) {
+              return [c[0], c[1], c[3], c[4], c[2], c[5]];
+            });
+            if (isValidCandleData(mapped, nowMs)) return mapped;
+          }
+        }
+      } catch (_) {}
+    }
+    
+    return [];
+  }
+  
+  // ROUTE C: Standard Tokens (BTC, SOL, ETH, DOGE, etc.)
+  // C1. Binance Vision Spot (Non-geo-restricted public cluster)
   try {
-    const visionUrl = 'https://data-api.binance.vision/api/v3/klines?symbol=' + encodeURIComponent(pair) +
+    const visionUrl = 'https://data-api.binance.vision/api/v3/klines?symbol=' + encodeURIComponent(norm) +
       '&interval=' + interval + '&startTime=' + fetchStart + '&endTime=' + fetchEnd + '&limit=1000';
     const visionRes = UrlFetchApp.fetch(visionUrl, { muteHttpExceptions: true });
     if (visionRes.getResponseCode() === 200) {
       const data = JSON.parse(visionRes.getContentText());
-      if (Array.isArray(data) && data.length > 0) {
-        return data;
-      }
+      if (isValidCandleData(data, nowMs)) return data;
     }
   } catch (_) {}
   
-  // 2. Try MEXC (Global top exchange, no US IP block, identical candle schema)
+  // C2. MEXC Global
   try {
-    const mexcUrl = 'https://api.mexc.com/api/v3/klines?symbol=' + encodeURIComponent(pair) +
+    const mexcUrl = 'https://api.mexc.com/api/v3/klines?symbol=' + encodeURIComponent(norm) +
       '&interval=' + interval + '&startTime=' + fetchStart + '&endTime=' + fetchEnd + '&limit=1000';
     const mexcRes = UrlFetchApp.fetch(mexcUrl, { muteHttpExceptions: true });
     if (mexcRes.getResponseCode() === 200) {
       const mData = JSON.parse(mexcRes.getContentText());
-      if (Array.isArray(mData) && mData.length > 0) {
-        return mData;
-      }
+      if (isValidCandleData(mData, nowMs)) return mData;
     }
   } catch (_) {}
   
-  // 3. Try Binance US (Allows US IPs)
+  // C3. Binance Futures
   try {
-    const usUrl = 'https://api.binance.us/api/v3/klines?symbol=' + encodeURIComponent(pair) +
-      '&interval=' + interval + '&startTime=' + fetchStart + '&endTime=' + fetchEnd + '&limit=1000';
-    const usRes = UrlFetchApp.fetch(usUrl, { muteHttpExceptions: true });
-    if (usRes.getResponseCode() === 200) {
-      const usData = JSON.parse(usRes.getContentText());
-      if (Array.isArray(usData) && usData.length > 0) {
-        return usData;
-      }
-    }
-  } catch (_) {}
-  
-  // 4. Try Binance public mirrors
-  const mirrors = ['https://api1.binance.com', 'https://api2.binance.com', 'https://api3.binance.com', 'https://api.binance.com'];
-  for (let m = 0; m < mirrors.length; m++) {
-    try {
-      const u = mirrors[m] + '/api/v3/klines?symbol=' + encodeURIComponent(pair) +
-        '&interval=' + interval + '&startTime=' + fetchStart + '&endTime=' + fetchEnd + '&limit=1000';
-      const r = UrlFetchApp.fetch(u, { muteHttpExceptions: true });
-      if (r.getResponseCode() === 200) {
-        const d = JSON.parse(r.getContentText());
-        if (Array.isArray(d) && d.length > 0) return d;
-      }
-    } catch (_) {}
-  }
-  
-  // 5. Try Binance Futures (fapi)
-  try {
-    const fUrl = 'https://fapi.binance.com/fapi/v1/klines?symbol=' + encodeURIComponent(pair) +
+    const fUrl = 'https://fapi.binance.com/fapi/v1/klines?symbol=' + encodeURIComponent(norm) +
       '&interval=' + interval + '&startTime=' + fetchStart + '&endTime=' + fetchEnd + '&limit=1000';
     const fRes = UrlFetchApp.fetch(fUrl, { muteHttpExceptions: true });
     if (fRes.getResponseCode() === 200) {
       const fData = JSON.parse(fRes.getContentText());
-      if (Array.isArray(fData) && fData.length > 0) return fData;
+      if (isValidCandleData(fData, nowMs)) return fData;
     }
   } catch (_) {}
+  
+  // C4. Binance US & Public Mirrors
+  const mirrors = ['https://api.binance.us', 'https://api1.binance.com', 'https://api2.binance.com', 'https://api.binance.com'];
+  for (let m = 0; m < mirrors.length; m++) {
+    try {
+      const u = mirrors[m] + '/api/v3/klines?symbol=' + encodeURIComponent(norm) +
+        '&interval=' + interval + '&startTime=' + fetchStart + '&endTime=' + fetchEnd + '&limit=1000';
+      const r = UrlFetchApp.fetch(u, { muteHttpExceptions: true });
+      if (r.getResponseCode() === 200) {
+        const d = JSON.parse(r.getContentText());
+        if (isValidCandleData(d, nowMs)) return d;
+      }
+    } catch (_) {}
+  }
   
   return [];
 }
@@ -568,25 +733,60 @@ function fetchCandles(pair, startTime, endTime) {
 }
 
 function fetchBinanceCandles(symbol, startTime, endTime) {
-  let pair = symbol;
-  if (!pair.endsWith('USDT') && !pair.endsWith('USD')) pair = pair + 'USDT';
-  return fetchFiveMinuteCandles(pair, startTime, endTime);
+  return fetchFiveMinuteCandles(symbol, startTime, endTime);
 }
 
 /**
- * Individual ticker fallback (used if bulk map missed a special pair)
+ * Individual ticker price fetcher with multi-exchange fallback
  */
 function fetchCurrentPrice(pair) {
+  const norm = normalizeSymbol(pair);
+  
+  // 1. Futures Priority (XMR, HYPE, KAS) -> Check Binance Futures first!
+  if (FUTURES_PRIORITY_SYMBOLS.has(norm)) {
+    try {
+      const res = UrlFetchApp.fetch('https://fapi.binance.com/fapi/v1/ticker/price?symbol=' + encodeURIComponent(norm), { muteHttpExceptions: true });
+      if (res.getResponseCode() === 200) {
+        const data = JSON.parse(res.getContentText());
+        if (data && data.price) return parseFloat(data.price) || 0;
+      }
+    } catch (_) {}
+  }
+  
+  // 2. MEXC Priority (WBT, LEO) -> Check MEXC first!
+  if (MEXC_PRIORITY_SYMBOLS.has(norm)) {
+    try {
+      const mRes = UrlFetchApp.fetch('https://api.mexc.com/api/v3/ticker/price?symbol=' + encodeURIComponent(norm), { muteHttpExceptions: true });
+      if (mRes.getResponseCode() === 200) {
+        const mData = JSON.parse(mRes.getContentText());
+        if (mData && mData.price) return parseFloat(mData.price) || 0;
+      }
+    } catch (_) {}
+  }
+  
+  // 3. Binance Vision Spot (Only if not delisted on spot)
+  if (!DELISTED_SPOT_SYMBOLS.has(norm)) {
+    try {
+      const res = UrlFetchApp.fetch('https://data-api.binance.vision/api/v3/ticker/price?symbol=' + encodeURIComponent(norm), { muteHttpExceptions: true });
+      if (res.getResponseCode() === 200) {
+        const data = JSON.parse(res.getContentText());
+        if (data && data.price) return parseFloat(data.price) || 0;
+      }
+    } catch (_) {}
+  }
+  
+  // 4. Binance Futures general fallback
   try {
-    const res = UrlFetchApp.fetch('https://data-api.binance.vision/api/v3/ticker/price?symbol=' + encodeURIComponent(pair), { muteHttpExceptions: true });
-    if (res.getResponseCode() === 200) {
-      const data = JSON.parse(res.getContentText());
-      if (data && data.price) return parseFloat(data.price) || 0;
+    const fRes = UrlFetchApp.fetch('https://fapi.binance.com/fapi/v1/ticker/price?symbol=' + encodeURIComponent(norm), { muteHttpExceptions: true });
+    if (fRes.getResponseCode() === 200) {
+      const fData = JSON.parse(fRes.getContentText());
+      if (fData && fData.price) return parseFloat(fData.price) || 0;
     }
   } catch (_) {}
   
+  // 5. MEXC general fallback
   try {
-    const mRes = UrlFetchApp.fetch('https://api.mexc.com/api/v3/ticker/price?symbol=' + encodeURIComponent(pair), { muteHttpExceptions: true });
+    const mRes = UrlFetchApp.fetch('https://api.mexc.com/api/v3/ticker/price?symbol=' + encodeURIComponent(norm), { muteHttpExceptions: true });
     if (mRes.getResponseCode() === 200) {
       const mData = JSON.parse(mRes.getContentText());
       if (mData && mData.price) return parseFloat(mData.price) || 0;
@@ -633,24 +833,33 @@ function parseTimestamp(cellVal, fallbackMs) {
 
 /**
  * 6. Quick Test Function
- * Select and run this in Apps Script to verify 5m candles and candle close time logging!
+ * Select and run this in Apps Script to verify live multi-exchange tickers,
+ * specifically verifying that XMR returns real market price (> $200) and NOT stale $118!
  */
 function testConnection() {
-  const testSymbol = 'BTCUSDT';
-  Logger.log('Testing bulk ticker fetch...');
+  Logger.log('--- Testing Multi-Exchange Live Tickers ---');
   const tickers = fetchAllLiveTickers();
-  Logger.log('Bulk tickers count: ' + tickers.size + ', BTC price: $' + (tickers.get(testSymbol) || 'N/A'));
+  Logger.log('Total tickers loaded: ' + tickers.size);
   
+  const btcPrice = tickers.get('BTCUSDT') || fetchCurrentPrice('BTCUSDT');
+  const xmrPrice = tickers.get('XMRUSDT') || fetchCurrentPrice('XMRUSDT');
+  const hypePrice = tickers.get('HYPEUSDT') || fetchCurrentPrice('HYPEUSDT');
+  const wbtPrice = tickers.get('WBTUSDT') || fetchCurrentPrice('WBTUSDT');
+  
+  Logger.log('BTC Price: $' + btcPrice);
+  Logger.log('XMR (Monero) Price: $' + xmrPrice + (xmrPrice > 200 ? ' [VERIFIED CORRECT LIVE PRICE!]' : ' [WARNING: Stale price!]'));
+  Logger.log('HYPE Price: $' + hypePrice);
+  Logger.log('WBT Price: $' + wbtPrice);
+  
+  Logger.log('--- Testing 5m Candle Fetch for XMR (Monero) ---');
   const now = new Date().getTime();
-  const startTime = now - 60 * 60 * 1000; // Last 1 hour
-  Logger.log('Testing 5-minute candle fetch for last 1 hour...');
-  const candles = fetchFiveMinuteCandles(testSymbol, startTime, now);
-  Logger.log('5m candles fetched: ' + (candles ? candles.length : 0));
-  if (candles && candles.length > 0) {
-    const firstCandle = candles[0];
-    const openTimeMs = firstCandle[0];
-    const endTimeMs = openTimeMs + (5 * 60 * 1000);
-    const endFormatted = Utilities.formatDate(new Date(endTimeMs), 'GMT+5:30', 'yyyy-MM-dd HH:mm:ss') + ' IST';
-    Logger.log('First 5m candle: OpenTime=' + openTimeMs + ', High=$' + firstCandle[2] + ', Low=$' + firstCandle[3] + ', Candle End Time=' + endFormatted);
+  const oneHourAgo = now - 60 * 60 * 1000;
+  const xmrCandles = fetchFiveMinuteCandles('XMRUSDT', oneHourAgo, now);
+  Logger.log('XMR 5m candles returned: ' + (xmrCandles ? xmrCandles.length : 0));
+  if (xmrCandles && xmrCandles.length > 0) {
+    const latestCandle = xmrCandles[xmrCandles.length - 1];
+    const cHigh = latestCandle[2];
+    const cLow = latestCandle[3];
+    Logger.log('Latest XMR 5m candle: High=$' + cHigh + ', Low=$' + cLow);
   }
 }
