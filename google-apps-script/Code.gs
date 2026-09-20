@@ -3,7 +3,7 @@
  * 
  * 1. Automatically formats Google Sheet with the required columns
  * 2. Receives new predictions via Web App Webhook (doPost)
- * 3. Runs 2-hour automated checks (checkPredictions) querying Binance APIs
+ * 3. Runs 15-minute automated checks (checkPredictions) querying Binance APIs
  *    to update Highest Price, Lowest Price, and mark status as Right/Wrong.
  */
 
@@ -61,10 +61,10 @@ function setupSheet() {
 }
 
 /**
- * 2. Setup Automated 2-Hour Cloud Trigger
- * Run this function once to start automated checks every 2 hours!
+ * 2. Setup Automated 15-Minute Cloud Trigger
+ * Run this function once to start automated checks every 15 minutes!
  */
-function createTwoHourTrigger() {
+function createFifteenMinuteTrigger() {
   // Delete existing check triggers to avoid duplicates
   const triggers = ScriptApp.getProjectTriggers();
   for (let i = 0; i < triggers.length; i++) {
@@ -73,13 +73,18 @@ function createTwoHourTrigger() {
     }
   }
   
-  // Create new 2-hour trigger
+  // Create new 15-minute trigger
   ScriptApp.newTrigger('checkPredictions')
     .timeBased()
-    .everyHours(2)
+    .everyMinutes(15)
     .create();
     
-  Logger.log('2-hour automated prediction check trigger successfully created!');
+  Logger.log('15-minute automated prediction check trigger successfully created!');
+}
+
+// Backward-compatibility alias so running createTwoHourTrigger also sets 15 minutes
+function createTwoHourTrigger() {
+  createFifteenMinuteTrigger();
 }
 
 /**
@@ -192,7 +197,7 @@ function doGet(e) {
 }
 
 /**
- * 5. Automated 2-Hour Checker
+ * 5. Automated 15-Minute Checker
  * Iterates through all predictions where status == 'Wrong', fetches Binance candles,
  * updates highest/lowest, and sets status to 'Right' if price hit or exceeded predicted price.
  */

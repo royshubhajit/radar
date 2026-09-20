@@ -18,12 +18,12 @@ Follow these simple steps to connect your Google Sheet to the Crypto Radar site 
 
 ---
 
-### Step 3: Run Setup & 2-Hour Trigger
+### Step 3: Run Setup & 15-Minute Trigger
 1. At the top of the Apps Script editor, select **`setupSheet`** from the function dropdown and click **Run**.
    * *(Google will ask for permission the first time. Click "Review permissions" -> select your Google account -> click "Advanced" -> click "Go to Untitled project (unsafe)" -> click "Allow".)*
    * Your Google Sheet will immediately be formatted with dark headers and frozen rows!
-2. Now select **`createTwoHourTrigger`** from the dropdown and click **Run**.
-   * This activates the 24/7 automated checker that runs on Google Cloud every 2 hours to evaluate your predictions!
+2. Now select **`createFifteenMinuteTrigger`** from the dropdown and click **Run**.
+   * This activates the 24/7 automated checker that runs on Google Cloud every 15 minutes to evaluate your predictions!
 
 ---
 
@@ -46,4 +46,4 @@ Follow these simple steps to connect your Google Sheet to the Crypto Radar site 
 4. Paste your **Web App URL** and your **Google Sheet URL**.
 5. Click **Save Settings**.
 
-You're done! Now whenever you click on any coin and log a prediction, it instantly writes to your Google Sheet, and Google's cloud will automatically monitor and evaluate the price every 2 hours!
+You're done! Now whenever you click on any coin and log a prediction, it instantly writes to your Google Sheet, and Google's cloud will automatically monitor and evaluate the price every 15 minutes!
