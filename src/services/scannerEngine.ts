@@ -46,6 +46,7 @@ class ScannerEngine {
   private countdownTimer: any = null;
   private history16Timer: any = null;
   private top100Timer: any = null;
+  private isInitialScan = true;
 
   constructor() {
     // Load config from localStorage if available
@@ -106,7 +107,7 @@ class ScannerEngine {
       }
       this.status.nextScanIn = getSecondsUntilNextCandleClose(this.config.timeframe);
       this.notify();
-      this.runScan();
+      this.runScan(true);
     } else {
       // Re-filter and sort current alerts if only threshold changed
       this.reFilterAlerts();
@@ -190,8 +191,8 @@ class ScannerEngine {
       this.refreshTop100Prices();
     }, 30 * 1000);
 
-    // 3. Initial scan
-    await this.runScan();
+    // 3. Initial scan (silent on initial page load)
+    await this.runScan(true);
 
     // 4. Initial 16-candle history fetch and 15-minute refresh
     this.fetch16History();
@@ -207,7 +208,7 @@ class ScannerEngine {
         this.notify();
       } else {
         // Candle close boundary reached! Execute scan and reset countdown
-        this.runScan();
+        this.runScan(false);
         this.status.nextScanIn = getSecondsUntilNextCandleClose(this.config.timeframe);
         this.notify();
       }
@@ -233,7 +234,7 @@ class ScannerEngine {
     }
   }
 
-  public async runScan(): Promise<void> {
+  public async runScan(isSilent = false): Promise<void> {
     if (this.status.isScanning) return;
 
     this.status.isScanning = true;
@@ -363,10 +364,11 @@ class ScannerEngine {
       const currentAlertSymbols = new Set(newAlerts.map(a => a.symbol));
       this.previousAlertSymbols = currentAlertSymbols;
 
-      // 5. Trigger audio chime if new drop alerts appeared
-      if (newAlertsFound > 0 && this.config.isSoundEnabled) {
+      // 5. Trigger audio chime if new drop alerts appeared on automated candle close
+      if (!isSilent && !this.isInitialScan && newAlertsFound > 0 && this.config.isSoundEnabled) {
         soundService.playDropAlert(this.config.soundVolume);
       }
+      this.isInitialScan = false;
 
       this.status.totalScanned = klinesMap.size;
       this.status.lastScannedAt = Date.now();
