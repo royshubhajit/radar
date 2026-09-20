@@ -73,3 +73,22 @@ export interface ScannerStatus {
   totalScanned: number;
   error: string | null;
 }
+
+export interface PredictionItem {
+  id: string;
+  symbol: string;
+  loggedTime: string;
+  currentPrice: number;
+  predictedPrice: number;
+  changePercent: number;
+  highestPrice?: number;
+  lowestPrice?: number;
+  lastCheckedAt?: string;
+  status: 'Wrong' | 'Right';
+  rightAt?: string;
+}
+
+export interface PredictionConfig {
+  webhookUrl: string;
+  sheetUrl?: string;
+}

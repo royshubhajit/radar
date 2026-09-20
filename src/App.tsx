@@ -6,6 +6,7 @@ import { CandlestickChart } from './components/CandlestickChart';
 import { AlertFeed } from './components/AlertFeed';
 import { WatchlistSidebar } from './components/WatchlistSidebar';
 import { CryptoCalculator } from './components/CryptoCalculator';
+import { PricePredictionCard } from './components/PricePredictionCard';
 import { AlertItem, AlertTimeframe, CoinInfo, KlineInterval, MiniCandle, ScannerConfig, ScannerStatus } from './types';
 import { formatTabTitlePrice } from './utils/priceFormatter';
 
@@ -247,6 +248,14 @@ export const App: React.FC = () => {
               initialPrice={calculatorTarget.price}
               clickId={calculatorTarget.clickId}
               onRefreshPrice={handleRefreshCalculatorPrice}
+            />
+          </div>
+
+          {/* Price Prediction Card with Google Sheet Sync & 2-Hour Monitoring */}
+          <div className="shrink-0">
+            <PricePredictionCard
+              selectedSymbol={selectedSymbol}
+              currentPrice={activeCoinPrice}
             />
           </div>
         </div>
