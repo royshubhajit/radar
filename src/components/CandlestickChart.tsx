@@ -402,9 +402,9 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
         const chgColor = isBull ? 'text-emerald-400' : 'text-rose-400';
         const dateStr = formatDateTime(Number(param.time), interval);
         const volumeVal = vol?.value ?? candle.volume ?? 0;
-        const cHigh = typeof candle.high === 'number' ? candle.high : (candle.close ?? 0);
-        const cLow = typeof candle.low === 'number' ? candle.low : (candle.open ?? 0);
-        const midPrice = cLow + 0.45 * (cHigh - cLow);
+        const cOpen = typeof candle.open === 'number' ? candle.open : 0;
+        const cClose = typeof candle.close === 'number' ? candle.close : 0;
+        const midPrice = cClose + 0.45 * (cOpen - cClose);
 
         // 1. Instant top bar update (zero React lag)
         if (bar) {
