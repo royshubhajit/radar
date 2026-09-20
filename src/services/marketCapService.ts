@@ -7,6 +7,17 @@ const EXCLUDED_SYMBOLS = new Set([
   'WEETH', 'CBETH', 'RETH', 'METH'
 ]);
 
+// Special symbol mappings to ensure active trading pairs on Binance/exchanges
+export const SYMBOL_TO_BINANCE: Record<string, string> = {
+  SATS: '1000SATSUSDT',
+  '1000SATS': '1000SATSUSDT',
+  BEAM: 'BEAMXUSDT',
+  BEAMX: 'BEAMXUSDT',
+  FTM: 'SUSDT',
+  MKR: 'SKYUSDT',
+  KLAY: 'KAIAUSDT',
+};
+
 // Top 100 curated fallback list ensures 100% uptime even if CoinGecko/CoinCap rate-limits
 const FALLBACK_TOP_100: Array<{ symbol: string; name: string }> = [
   { symbol: 'BTC', name: 'Bitcoin' },
@@ -51,7 +62,7 @@ const FALLBACK_TOP_100: Array<{ symbol: string; name: string }> = [
   { symbol: 'OP', name: 'Optimism' },
   { symbol: 'INJ', name: 'Injective' },
   { symbol: 'STX', name: 'Stacks' },
-  { symbol: 'FTM', name: 'Fantom' },
+  { symbol: 'S', name: 'Sonic' },
   { symbol: 'SEI', name: 'Sei' },
   { symbol: 'BONK', name: 'Bonk' },
   { symbol: 'FLOKI', name: 'Floki' },
@@ -63,13 +74,13 @@ const FALLBACK_TOP_100: Array<{ symbol: string; name: string }> = [
   { symbol: 'SAND', name: 'The Sandbox' },
   { symbol: 'MANA', name: 'Decentraland' },
   { symbol: 'AXS', name: 'Axie Infinity' },
-  { symbol: 'EOS', name: 'EOS' },
+  { symbol: 'RAY', name: 'Raydium' },
   { symbol: 'FLOW', name: 'Flow' },
   { symbol: 'GALA', name: 'Gala' },
   { symbol: 'NEO', name: 'Neo' },
-  { symbol: 'KLAY', name: 'Klaytn' },
+  { symbol: 'KAIA', name: 'Kaia' },
   { symbol: 'CRV', name: 'Curve DAO' },
-  { symbol: 'MKR', name: 'Maker' },
+  { symbol: 'SKY', name: 'Sky' },
   { symbol: 'LDO', name: 'Lido DAO' },
   { symbol: 'QNT', name: 'Quant' },
   { symbol: 'EGLD', name: 'MultiversX' },
@@ -98,12 +109,12 @@ const FALLBACK_TOP_100: Array<{ symbol: string; name: string }> = [
   { symbol: 'GNO', name: 'Gnosis' },
   { symbol: 'JASMY', name: 'JasmyCoin' },
   { symbol: 'SUPER', name: 'SuperVerse' },
-  { symbol: 'BEAM', name: 'Beam' },
+  { symbol: 'BEAMX', name: 'Beam' },
   { symbol: 'PYTH', name: 'Pyth Network' },
   { symbol: 'NOT', name: 'Notcoin' },
   { symbol: 'STRK', name: 'Starknet' },
   { symbol: 'ORDI', name: 'Ordinals' },
-  { symbol: 'SATS', name: 'SATS' },
+  { symbol: '1000SATS', name: '1000SATS (Ordinals)' },
   { symbol: 'MEME', name: 'Memecoin' },
   { symbol: 'ARKM', name: 'Arkham' },
   { symbol: 'ALT', name: 'Altlayer' },
@@ -141,10 +152,11 @@ class MarketCapService {
             const sym = (item.symbol || '').toUpperCase();
             if (EXCLUDED_SYMBOLS.has(sym)) continue;
             
+            const binanceSymbol = SYMBOL_TO_BINANCE[sym] || `${sym}USDT`;
             list.push({
               id: item.id || sym.toLowerCase(),
               symbol: sym,
-              binanceSymbol: `${sym}USDT`,
+              binanceSymbol,
               name: item.name || sym,
               rank: rank++,
               priceUsd: parseFloat(item.priceUsd) || 0,
@@ -180,10 +192,11 @@ class MarketCapService {
             const sym = (item.symbol || '').toUpperCase();
             if (EXCLUDED_SYMBOLS.has(sym)) continue;
 
+            const binanceSymbol = SYMBOL_TO_BINANCE[sym] || `${sym}USDT`;
             list.push({
               id: item.id || sym.toLowerCase(),
               symbol: sym,
-              binanceSymbol: `${sym}USDT`,
+              binanceSymbol,
               name: item.name || sym,
               rank: rank++,
               priceUsd: item.current_price || 0,
@@ -209,7 +222,7 @@ class MarketCapService {
     const fallbackList: CoinInfo[] = FALLBACK_TOP_100.map((item, index) => ({
       id: item.symbol.toLowerCase(),
       symbol: item.symbol,
-      binanceSymbol: `${item.symbol}USDT`,
+      binanceSymbol: SYMBOL_TO_BINANCE[item.symbol] || `${item.symbol}USDT`,
       name: item.name,
       rank: index + 1,
       priceUsd: 0,

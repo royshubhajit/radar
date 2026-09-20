@@ -13,6 +13,8 @@ class BinanceService {
   private currentEndpointIndex = 0;
   private symbolSourceCache = new Map<string, ExchangeSource>([
     ['HYPEUSDT', 'binance_futures'],
+    ['XMRUSDT', 'binance_futures'],
+    ['KASUSDT', 'binance_futures'],
     ['WBTUSDT', 'mexc'],
     ['LEOUSDT', 'bitfinex'],
   ]);
@@ -94,7 +96,7 @@ class BinanceService {
         const rawData = await res.json();
         if (!Array.isArray(rawData)) return [];
 
-        return rawData.map((item: any[]) => ({
+        const candles = rawData.map((item: any[]) => ({
           time: Math.floor(item[0] / 1000),
           open: parseFloat(item[1]),
           high: parseFloat(item[2]),
@@ -102,6 +104,17 @@ class BinanceService {
           close: parseFloat(item[4]),
           volume: parseFloat(item[5]),
         }));
+
+        // Reject stale/delisted pairs returning ancient history (e.g. XMR returning 2024 candles)
+        if (candles.length > 0) {
+          const lastCandleTime = candles[candles.length - 1].time;
+          const twoDaysAgo = Math.floor(Date.now() / 1000) - 86400 * 2;
+          if (lastCandleTime < twoDaysAgo) {
+            return [];
+          }
+        }
+
+        return candles;
       } catch (err) {
         if (attempt === maxRetries) return [];
         this.switchEndpoint();
@@ -236,6 +249,16 @@ class BinanceService {
         const data = await res.json();
         if (Array.isArray(data)) {
           for (const item of data) {
+            // Reject delisted/halted spot symbols where order book has no active bids/asks
+            const hasBidsAsks = parseFloat(item.bidPrice) > 0 || parseFloat(item.askPrice) > 0;
+            if (!hasBidsAsks) {
+              continue;
+            }
+            // If explicitly routed to another exchange (e.g. futures), let that exchange take precedence
+            if (this.symbolSourceCache.get(item.symbol) === 'binance_futures') {
+              continue;
+            }
+
             map.set(item.symbol, {
               price: parseFloat(item.lastPrice) || 0,
               change24h: parseFloat(item.priceChangePercent) || 0,
@@ -248,14 +271,15 @@ class BinanceService {
       console.warn('Failed to fetch 24h tickers:', e);
     }
 
-    // 2. Binance Futures (for HYPE and any futures-only tokens)
+    // 2. Binance Futures (for HYPE, XMR, KAS, and any futures-only tokens)
     try {
       const fRes = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr');
       if (fRes.ok) {
         const fData = await fRes.json();
         if (Array.isArray(fData)) {
           for (const item of fData) {
-            if (!map.has(item.symbol)) {
+            const isExplicitFutures = this.symbolSourceCache.get(item.symbol) === 'binance_futures';
+            if (!map.has(item.symbol) || isExplicitFutures) {
               map.set(item.symbol, {
                 price: parseFloat(item.lastPrice) || 0,
                 change24h: parseFloat(item.priceChangePercent) || 0,
