@@ -11,7 +11,7 @@ import {
 import { Candle, KlineInterval } from '../types';
 import { binanceService } from '../services/binanceService';
 import { useBinanceWebSocket } from '../hooks/useBinanceWebSocket';
-import { Activity, Clock, AlertCircle } from 'lucide-react';
+import { Activity, Clock, AlertCircle, Bell } from 'lucide-react';
 import { formatPriceDisplay } from '../utils/priceFormatter';
 
 interface CandlestickChartProps {
@@ -22,6 +22,8 @@ interface CandlestickChartProps {
   onIntervalChange?: (interval: KlineInterval) => void;
   onInitialPriceLoaded?: (symbol: string, price: number) => void;
   onLivePrice?: (symbol: string, price: number) => void;
+  isReminderSet?: boolean;
+  onToggleReminder?: () => void;
 }
 
 const INTERVALS: { label: string; value: KlineInterval }[] = [
@@ -87,6 +89,8 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
   onIntervalChange,
   onInitialPriceLoaded,
   onLivePrice,
+  isReminderSet = false,
+  onToggleReminder,
 }) => {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -609,6 +613,32 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
               <span className="text-slate-400 hidden sm:inline">Next {interval}:</span>
               <span className="text-amber-400 font-bold">{candleCountdown}</span>
             </div>
+
+            {/* Next Candle Reminder Button */}
+            {onToggleReminder && (
+              <button
+                onClick={onToggleReminder}
+                className={`flex items-center gap-1 px-2 py-0.5 rounded-lg border text-[10px] sm:text-[11px] font-mono font-bold transition-all cursor-pointer ${
+                  isReminderSet
+                    ? 'bg-amber-500/25 border-amber-500/60 text-amber-300 shadow-sm shadow-amber-900/40 ring-1 ring-amber-500/30'
+                    : 'bg-[#141b29] border-[#24324c] text-slate-400 hover:text-amber-300 hover:border-amber-500/40'
+                }`}
+                title={
+                  isReminderSet
+                    ? `Reminder is SET for ${symbol.replace('USDT', '')} next ${interval} candle. Click to remove.`
+                    : `Set reminder when next ${interval} candle starts for ${symbol.replace('USDT', '')}`
+                }
+              >
+                <Bell
+                  className={`w-3 h-3 sm:w-3.5 sm:h-3.5 transition-transform ${
+                    isReminderSet ? 'text-amber-400 fill-amber-400 scale-110 animate-bounce' : 'text-slate-400'
+                  }`}
+                />
+                <span className="hidden xs:inline">
+                  {isReminderSet ? 'Reminder Set' : 'Remind'}
+                </span>
+              </button>
+            )}
           </div>
         </div>
 

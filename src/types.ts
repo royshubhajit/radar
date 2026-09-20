@@ -94,3 +94,14 @@ export interface PredictionConfig {
   webhookUrl: string;
   sheetUrl?: string;
 }
+
+export interface CandleReminder {
+  id: string;
+  symbol: string;
+  coinName?: string;
+  interval: KlineInterval;
+  targetTimeMs: number;
+  createdAt: number;
+  triggered: boolean;
+  triggeredAt?: number;
+}

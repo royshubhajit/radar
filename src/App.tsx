@@ -1,15 +1,16 @@
-import React, { useEffect, useState, useMemo, useCallback } from 'react';
+import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { scannerEngine } from './services/scannerEngine';
-import { binanceService } from './services/binanceService';
 import { Header } from './components/Header';
 import { CandlestickChart } from './components/CandlestickChart';
 import { AlertFeed } from './components/AlertFeed';
 import { WatchlistSidebar } from './components/WatchlistSidebar';
-import { CryptoCalculator } from './components/CryptoCalculator';
 import { PricePredictionCard } from './components/PricePredictionCard';
-import { Target, Calculator, BarChart2, BellRing, ListFilter, LayoutGrid } from 'lucide-react';
-import { AlertItem, AlertTimeframe, CoinInfo, KlineInterval, MiniCandle, ScannerConfig, ScannerStatus } from './types';
+import { RemindersCard } from './components/RemindersCard';
+import { Target, Bell, BarChart2, BellRing, ListFilter, LayoutGrid } from 'lucide-react';
+import { AlertItem, AlertTimeframe, CandleReminder, CoinInfo, KlineInterval, MiniCandle, ScannerConfig, ScannerStatus } from './types';
 import { formatTabTitlePrice } from './utils/priceFormatter';
+import { reminderService, getNextCandleStartTime } from './services/reminderService';
+import { soundService } from './services/soundService';
 
 export const App: React.FC = () => {
   const [config, setConfig] = useState<ScannerConfig>(scannerEngine.getConfig());
@@ -23,8 +24,11 @@ export const App: React.FC = () => {
   const [selectedName, setSelectedName] = useState('Bitcoin');
   const [chartInterval, setChartInterval] = useState<KlineInterval>('15m');
   const [activeCoinPrice, setActiveCoinPrice] = useState<number>(0);
-  const [bottomUtilityTab, setBottomUtilityTab] = useState<'prediction' | 'calculator'>('prediction');
+  const [bottomUtilityTab, setBottomUtilityTab] = useState<'prediction' | 'reminders'>('prediction');
   const [mobileTab, setMobileTab] = useState<'chart' | 'alerts' | 'watchlist' | 'utility' | 'all'>('chart');
+  
+  // Candle Start Reminders
+  const [reminders, setReminders] = useState<CandleReminder[]>(() => reminderService.loadReminders());
 
   // Resolved active price fallback so price is never 0 even before websocket ticks
   const resolvedActivePrice = useMemo(() => {
@@ -32,17 +36,6 @@ export const App: React.FC = () => {
     const match = coins.find((c) => c.binanceSymbol === selectedSymbol);
     return match && match.priceUsd > 0 ? match.priceUsd : 0;
   }, [activeCoinPrice, coins, selectedSymbol]);
-
-  // Calculator target: captured ONLY ONCE on coin click
-  const [calculatorTarget, setCalculatorTarget] = useState<{
-    symbol: string;
-    price: number;
-    clickId: number;
-  }>({
-    symbol: 'BTCUSDT',
-    price: 0,
-    clickId: 1,
-  });
 
   useEffect(() => {
     // Subscribe to scanner engine state updates
@@ -103,13 +96,6 @@ export const App: React.FC = () => {
     if (resolvedPrice && resolvedPrice > 0) {
       setActiveCoinPrice(resolvedPrice);
     }
-
-    // Snapshot is set ONLY ONCE upon coin click
-    setCalculatorTarget((prev) => ({
-      symbol,
-      price: resolvedPrice,
-      clickId: prev.clickId + 1,
-    }));
   };
 
   // If price was 0 on click (e.g. unlisted token on first load), chart's first klines close populates it ONCE
@@ -117,28 +103,6 @@ export const App: React.FC = () => {
     if (symbol === selectedSymbol && price > 0) {
       setActiveCoinPrice(price);
     }
-    setCalculatorTarget((prev) => {
-      if (prev.symbol === symbol && (!prev.price || prev.price === 0)) {
-        return { ...prev, price };
-      }
-      return prev;
-    });
-  }, [selectedSymbol]);
-
-  // Manual re-sync trigger for the calculator snapshot
-  const handleRefreshCalculatorPrice = useCallback(async () => {
-    try {
-      const recent = await binanceService.getKlines(selectedSymbol, '1m', 1);
-      if (recent.length > 0) {
-        const latestPrice = recent[recent.length - 1].close;
-        setActiveCoinPrice(latestPrice);
-        setCalculatorTarget((prev) => ({
-          symbol: selectedSymbol,
-          price: latestPrice,
-          clickId: prev.clickId + 1,
-        }));
-      }
-    } catch (_) {}
   }, [selectedSymbol]);
 
   // Keep active chart coin in sync with Top 100 list on 30s update and live WS ticks
@@ -200,6 +164,86 @@ export const App: React.FC = () => {
   const alertedSymbols = useMemo(() => {
     return new Set(alerts.map((a) => a.symbol));
   }, [alerts]);
+
+  // Persist reminders to localStorage whenever changed
+  useEffect(() => {
+    reminderService.saveReminders(reminders);
+  }, [reminders]);
+
+  // Check reminders every 1 second
+  const lastReminderSoundAt = useRef<number>(0);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const now = Date.now();
+      setReminders((prev) => {
+        let hasNewlyTriggered = false;
+        const next = prev.map((r) => {
+          if (!r.triggered && now >= r.targetTimeMs) {
+            hasNewlyTriggered = true;
+            return { ...r, triggered: true, triggeredAt: now };
+          }
+          return r;
+        });
+
+        if (hasNewlyTriggered) {
+          // Rule: If there are multiple coins, only 1 reminder sound. Only 1 reminder when next candle starts.
+          if (now - lastReminderSoundAt.current > 2500) {
+            soundService.playReminderChime();
+            lastReminderSoundAt.current = now;
+          }
+        }
+
+        return next;
+      });
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, []);
+
+  // Is a reminder active for the currently viewed coin & timeframe?
+  const isCurrentReminderSet = useMemo(() => {
+    return reminders.some(
+      (r) => !r.triggered && r.symbol === selectedSymbol && r.interval === chartInterval
+    );
+  }, [reminders, selectedSymbol, chartInterval]);
+
+  // Toggle reminder for currently open coin and interval
+  const handleToggleReminder = useCallback(() => {
+    setReminders((prev) => {
+      const existingIdx = prev.findIndex(
+        (r) => !r.triggered && r.symbol === selectedSymbol && r.interval === chartInterval
+      );
+
+      if (existingIdx >= 0) {
+        // Remove existing reminder
+        const next = [...prev];
+        next.splice(existingIdx, 1);
+        return next;
+      } else {
+        // Add new reminder for the start of the next candle
+        const targetTimeMs = getNextCandleStartTime(chartInterval);
+        const newReminder: CandleReminder = {
+          id: `${selectedSymbol}_${chartInterval}_${targetTimeMs}_${Date.now()}`,
+          symbol: selectedSymbol,
+          coinName: selectedName,
+          interval: chartInterval,
+          targetTimeMs,
+          createdAt: Date.now(),
+          triggered: false,
+        };
+        return [...prev, newReminder];
+      }
+    });
+  }, [selectedSymbol, selectedName, chartInterval]);
+
+  const handleRemoveReminder = useCallback((id: string) => {
+    setReminders((prev) => prev.filter((r) => r.id !== id));
+  }, []);
+
+  const handleClearAllReminders = useCallback(() => {
+    setReminders([]);
+  }, []);
 
   return (
     <div className="flex flex-col min-h-screen xl:h-screen w-full bg-[#07090e] text-slate-100 overflow-x-hidden xl:overflow-hidden select-none">
@@ -311,6 +355,8 @@ export const App: React.FC = () => {
               onIntervalChange={setChartInterval}
               onInitialPriceLoaded={handleInitialPriceLoaded}
               onLivePrice={handleLivePrice}
+              isReminderSet={isCurrentReminderSet}
+              onToggleReminder={handleToggleReminder}
             />
           </div>
 
@@ -392,15 +438,20 @@ export const App: React.FC = () => {
               </button>
 
               <button
-                onClick={() => setBottomUtilityTab('calculator')}
+                onClick={() => setBottomUtilityTab('reminders')}
                 className={`flex-1 py-1.5 px-2.5 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
-                  bottomUtilityTab === 'calculator'
-                    ? 'bg-slate-700 text-white shadow-md'
+                  bottomUtilityTab === 'reminders'
+                    ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-md shadow-blue-900/30 ring-1 ring-blue-500/30'
                     : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
                 }`}
               >
-                <Calculator className="w-3.5 h-3.5 text-slate-300" />
-                <span>Futures Calculator</span>
+                <Bell className="w-3.5 h-3.5 text-amber-300" />
+                <span>Reminders</span>
+                {reminders.filter((r) => !r.triggered).length > 0 && (
+                  <span className="px-1.5 py-0.2 rounded-full text-[9px] bg-amber-500 text-slate-950 font-bold font-mono">
+                    {reminders.filter((r) => !r.triggered).length}
+                  </span>
+                )}
               </button>
             </div>
 
@@ -411,11 +462,18 @@ export const App: React.FC = () => {
                 currentPrice={resolvedActivePrice}
               />
             ) : (
-              <CryptoCalculator
-                selectedSymbol={calculatorTarget.symbol}
-                initialPrice={calculatorTarget.price}
-                clickId={calculatorTarget.clickId}
-                onRefreshPrice={handleRefreshCalculatorPrice}
+              <RemindersCard
+                reminders={reminders}
+                onRemoveReminder={handleRemoveReminder}
+                onClearAll={handleClearAllReminders}
+                onSelectCoin={(sym) => {
+                  const coin = coins.find((c) => c.binanceSymbol === sym);
+                  handleSelectCoin(sym, coin?.name || sym.replace('USDT', ''));
+                }}
+                currentSymbol={selectedSymbol}
+                currentInterval={chartInterval}
+                onToggleReminder={handleToggleReminder}
+                isCurrentReminderSet={isCurrentReminderSet}
               />
             )}
           </div>
