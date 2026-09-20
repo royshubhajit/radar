@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { CoinInfo, MiniCandle } from '../types';
-import { Search, TrendingUp, TrendingDown } from 'lucide-react';
+import { Search, TrendingUp, TrendingDown, X } from 'lucide-react';
 import { formatPriceDisplay } from '../utils/priceFormatter';
 
 interface WatchlistSidebarProps {
@@ -50,16 +50,25 @@ export const WatchlistSidebar: React.FC<WatchlistSidebarProps> = ({
           )}
         </div>
 
-        {/* Search input */}
-        <div className="relative">
-          <Search className="absolute left-2.5 top-2.5 w-3.5 h-3.5 text-slate-400" />
+        {/* Search input with cross clear button */}
+        <div className="relative flex items-center">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none" />
           <input
             type="text"
             placeholder="Search coin or symbol..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full bg-[#0b0e14] border border-[#232d42] rounded-lg pl-8 pr-3 py-1.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-colors font-mono"
+            className="w-full bg-[#0b0e14] border border-[#232d42] rounded-lg pl-8 pr-8 py-1.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-colors font-mono"
           />
+          {searchQuery && (
+            <button
+              onClick={() => setSearchQuery('')}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-100 p-0.5 rounded-full hover:bg-slate-800 transition-colors cursor-pointer"
+              title="Clear search"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
         </div>
 
         {/* 16 Candle Strip Legend / Direction Indicator */}

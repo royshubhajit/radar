@@ -410,13 +410,13 @@ export const App: React.FC = () => {
             />
           </div>
 
-          {/* Bottom Right: Tabbed Utility Widget (Target Prediction & Futures Calculator) */}
+          {/* Bottom Right: Tabbed Utility Widget (Target Prediction & Reminders) */}
           <div
-            className={`shrink-0 flex flex-col gap-1.5 ${
+            className={`shrink-0 flex flex-col gap-1.5 xl:h-[265px] ${
               mobileTab === 'utility'
                 ? 'min-h-[440px]'
                 : mobileTab === 'all'
-                ? ''
+                ? 'h-[265px]'
                 : 'hidden xl:flex'
             }`}
           >
@@ -455,24 +455,26 @@ export const App: React.FC = () => {
               </button>
             </div>
 
-            {/* Active Tab View */}
-            {bottomUtilityTab === 'prediction' ? (
-              <PricePredictionCard
-                selectedSymbol={selectedSymbol}
-                currentPrice={resolvedActivePrice}
-              />
-            ) : (
-              <RemindersCard
-                reminders={reminders}
-                onRemoveReminder={handleRemoveReminder}
-                onClearAll={handleClearAllReminders}
-                onSelectCoin={(sym) => {
-                  const coin = coins.find((c) => c.binanceSymbol === sym);
-                  handleSelectCoin(sym, coin?.name || sym.replace('USDT', ''));
-                }}
-                currentSymbol={selectedSymbol}
-              />
-            )}
+            {/* Active Tab View - always fixed height container */}
+            <div className="flex-1 min-h-0 overflow-hidden">
+              {bottomUtilityTab === 'prediction' ? (
+                <PricePredictionCard
+                  selectedSymbol={selectedSymbol}
+                  currentPrice={resolvedActivePrice}
+                />
+              ) : (
+                <RemindersCard
+                  reminders={reminders}
+                  onRemoveReminder={handleRemoveReminder}
+                  onClearAll={handleClearAllReminders}
+                  onSelectCoin={(sym) => {
+                    const coin = coins.find((c) => c.binanceSymbol === sym);
+                    handleSelectCoin(sym, coin?.name || sym.replace('USDT', ''));
+                  }}
+                  currentSymbol={selectedSymbol}
+                />
+              )}
+            </div>
           </div>
         </div>
       </div>
