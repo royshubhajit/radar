@@ -102,7 +102,7 @@ function doPost(e) {
     }
     
     const symbol = (data.symbol || '').toUpperCase();
-    const currentTime = data.currentTime || Utilities.formatDate(new Date(), 'GMT+0', 'yyyy-MM-dd HH:mm:ss') + ' UTC';
+    const currentTime = data.currentTime || Utilities.formatDate(new Date(), 'GMT+5:30', 'yyyy-MM-dd HH:mm:ss') + ' IST';
     const currentPrice = parseFloat(data.currentPrice) || 0;
     const predictedPrice = parseFloat(data.predictedPrice) || 0;
     const changePercent = parseFloat(data.changePercent) || 0;
@@ -207,7 +207,7 @@ function checkPredictions() {
   const range = sheet.getRange(2, 1, lastRow - 1, HEADERS.length);
   const values = range.getValues();
   const now = new Date();
-  const nowFormatted = Utilities.formatDate(now, 'GMT+0', 'yyyy-MM-dd HH:mm:ss') + ' UTC';
+  const nowFormatted = Utilities.formatDate(now, 'GMT+5:30', 'yyyy-MM-dd HH:mm:ss') + ' IST';
   
   for (let i = 0; i < values.length; i++) {
     const row = values[i];
@@ -219,8 +219,19 @@ function checkPredictions() {
     
     const symbol = String(row[0] || '').trim().toUpperCase();
     const loggedTimeStr = String(row[1] || '');
-    const loggedDate = new Date(loggedTimeStr.replace(' UTC', 'Z'));
-    const startMs = !isNaN(loggedDate.getTime()) ? loggedDate.getTime() : (now.getTime() - 24 * 3600 * 1000);
+    let startMs = 0;
+    if (loggedTimeStr.includes('IST')) {
+      const clean = loggedTimeStr.replace(' IST', '').trim().replace(' ', 'T') + '+05:30';
+      startMs = new Date(clean).getTime();
+    } else if (loggedTimeStr.includes('UTC')) {
+      const loggedDate = new Date(loggedTimeStr.replace(' UTC', 'Z'));
+      startMs = loggedDate.getTime();
+    } else {
+      startMs = new Date(loggedTimeStr).getTime();
+    }
+    if (isNaN(startMs) || startMs <= 0) {
+      startMs = now.getTime() - 24 * 3600 * 1000;
+    }
     const endMs = now.getTime();
     
     let currentHigh = parseFloat(row[5]) || parseFloat(row[2]) || 0;
@@ -246,7 +257,7 @@ function checkPredictions() {
         // Bullish check: Did price reach or exceed predicted price?
         if (cHigh >= predictedPrice && !isRight) {
           isRight = true;
-          rightTimestamp = Utilities.formatDate(new Date(cOpenTime), 'GMT+0', 'yyyy-MM-dd HH:mm:ss') + ' UTC';
+          rightTimestamp = Utilities.formatDate(new Date(cOpenTime), 'GMT+5:30', 'yyyy-MM-dd HH:mm:ss') + ' IST';
         }
       }
       

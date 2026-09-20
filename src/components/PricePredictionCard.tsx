@@ -344,7 +344,7 @@ export const PricePredictionCard: React.FC<PricePredictionCardProps> = ({
                       <div className="flex items-center gap-1.5">
                         <span className="font-mono font-bold text-slate-200">{item.symbol}</span>
                         <span className="text-[10px] text-slate-400">
-                          {item.loggedTime.slice(5, 16)}
+                          {item.loggedTime.replace(' IST', '').slice(5, 16)} IST
                         </span>
                       </div>
                       <div className="flex items-center gap-2 font-mono">

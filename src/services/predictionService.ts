@@ -3,6 +3,22 @@ import { PredictionConfig, PredictionItem } from '../types';
 const CONFIG_KEY = 'crypto_radar_prediction_config';
 const HISTORY_KEY = 'crypto_radar_predictions_history';
 
+export function formatToIST(date: Date = new Date()): string {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+  const map: Record<string, string> = {};
+  for (const p of parts) map[p.type] = p.value;
+  return `${map.year}-${map.month}-${map.day} ${map.hour}:${map.minute}:${map.second} IST`;
+}
+
 class PredictionService {
   public getConfig(): PredictionConfig {
     try {
@@ -46,18 +62,18 @@ class PredictionService {
     changePercent: number;
   }): Promise<{ success: boolean; message: string; savedLocallyOnly?: boolean }> {
     const now = new Date();
-    const isoString = now.toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+    const istString = formatToIST(now);
 
     const newItem: PredictionItem = {
       id: Date.now().toString(),
       symbol: params.symbol.toUpperCase(),
-      loggedTime: isoString,
+      loggedTime: istString,
       currentPrice: params.currentPrice,
       predictedPrice: params.predictedPrice,
       changePercent: params.changePercent,
       highestPrice: params.currentPrice,
       lowestPrice: params.currentPrice,
-      lastCheckedAt: isoString,
+      lastCheckedAt: istString,
       status: 'Wrong',
       rightAt: '',
     };
