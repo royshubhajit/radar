@@ -38,6 +38,10 @@ const SYMBOL_MAPPINGS = {
   'FTM': 'SUSDT',
   'MKR': 'SKYUSDT',
   'KLAY': 'KAIAUSDT',
+  'USELESS': 'USELESSUSDT',
+  'MARSCOIN': 'MARSCOINUSDT',
+  'FARTCOIN': 'FARTCOINUSDT',
+  'PENGU': 'PENGUUSDT'
 };
 
 // Delisted on Binance Spot: Binance Spot ticker/price endpoint returns stale frozen 2024 prices (e.g. XMR ~$118)
@@ -54,7 +58,9 @@ const FUTURES_PRIORITY_SYMBOLS = new Set([
   'XMRUSDT',
   'HYPEUSDT',
   'KASUSDT',
-  '1000SATSUSDT'
+  '1000SATSUSDT',
+  'USELESSUSDT',
+  'FARTCOINUSDT'
 ]);
 
 // Routed to MEXC (api.mexc.com)

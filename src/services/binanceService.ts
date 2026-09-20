@@ -15,8 +15,8 @@ class BinanceService {
     ['HYPEUSDT', 'binance_futures'],
     ['XMRUSDT', 'binance_futures'],
     ['KASUSDT', 'binance_futures'],
-    ['WBTUSDT', 'mexc'],
-    ['LEOUSDT', 'bitfinex'],
+    ['USELESSUSDT', 'binance_futures'],
+    ['FARTCOINUSDT', 'binance_futures'],
   ]);
 
   private getBaseUrl(): string {

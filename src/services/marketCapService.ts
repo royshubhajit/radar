@@ -1,10 +1,15 @@
 import { CoinInfo } from '../types';
 
-// Stablecoins and wrapped pegged tokens to filter out from drop screener
+// Stablecoins, wrapped pegged tokens, synthetic RWAs, and user-excluded coins
 const EXCLUDED_SYMBOLS = new Set([
   'USDT', 'USDC', 'FDUSD', 'DAI', 'USDE', 'TUSD', 'BUSD', 'USDD', 
   'PYUSD', 'USDP', 'EUR', 'EURS', 'WBTC', 'WETH', 'STETH', 'WBETH', 
-  'WEETH', 'CBETH', 'RETH', 'METH'
+  'WEETH', 'CBETH', 'RETH', 'METH',
+  // User excluded tokens:
+  'FIGR_HELOC', 'RAIN', 'WBT', 'USDS', 'LEO', 'USD1', 'USDG', 'CRO',
+  'XAUT', 'USYC', 'OKB', 'RLUSF', 'BUIDL', 'USDY', 'MNT', 'PAXG',
+  'HTX', 'BGB', 'EURSAFO', 'USDG0', 'USDGO', 'USDF', 'U', 'GT', 'KCS',
+  'PI', 'EUTBL', 'JAAA', 'USTB', 'GHO', 'BDX', 'FLR', 'USDO', 'YLDS'
 ]);
 
 // Special symbol mappings to ensure active trading pairs on Binance/exchanges
@@ -16,7 +21,19 @@ export const SYMBOL_TO_BINANCE: Record<string, string> = {
   FTM: 'SUSDT',
   MKR: 'SKYUSDT',
   KLAY: 'KAIAUSDT',
+  USELESS: 'USELESSUSDT',
+  MARSCOIN: 'MARSCOINUSDT',
+  FARTCOIN: 'FARTCOINUSDT',
+  PENGU: 'PENGUUSDT',
 };
+
+// Priority user coins guaranteed to be included in the watchlist
+export const PRIORITY_COINS: Array<{ symbol: string; name: string; binanceSymbol: string }> = [
+  { symbol: 'USELESS', name: 'Useless', binanceSymbol: 'USELESSUSDT' },
+  { symbol: 'MARSCOIN', name: 'Marscoin', binanceSymbol: 'MARSCOINUSDT' },
+  { symbol: 'FARTCOIN', name: 'Fartcoin', binanceSymbol: 'FARTCOINUSDT' },
+  { symbol: 'PENGU', name: 'Pudgy Penguins', binanceSymbol: 'PENGUUSDT' },
+];
 
 // Top 100 curated fallback list ensures 100% uptime even if CoinGecko/CoinCap rate-limits
 const FALLBACK_TOP_100: Array<{ symbol: string; name: string }> = [
@@ -36,8 +53,10 @@ const FALLBACK_TOP_100: Array<{ symbol: string; name: string }> = [
   { symbol: 'DOT', name: 'Polkadot' },
   { symbol: 'BCH', name: 'Bitcoin Cash' },
   { symbol: 'HYPE', name: 'Hyperliquid' },
-  { symbol: 'LEO', name: 'UNUS SED LEO' },
-  { symbol: 'WBT', name: 'WhiteBIT Token' },
+  { symbol: 'USELESS', name: 'Useless' },
+  { symbol: 'MARSCOIN', name: 'Marscoin' },
+  { symbol: 'FARTCOIN', name: 'Fartcoin' },
+  { symbol: 'PENGU', name: 'Pudgy Penguins' },
   { symbol: 'NEAR', name: 'NEAR Protocol' },
   { symbol: 'UNI', name: 'Uniswap' },
   { symbol: 'LTC', name: 'Litecoin' },
@@ -138,59 +157,19 @@ class MarketCapService {
       return this.cachedCoins;
     }
 
-    // Try CoinCap API
-    try {
-      const response = await fetch('https://api.coincap.io/v2/assets?limit=120', {
-        headers: { 'Accept': 'application/json' }
-      });
-      if (response.ok) {
-        const json = await response.json();
-        if (json.data && Array.isArray(json.data)) {
-          const list: CoinInfo[] = [];
-          let rank = 1;
-          for (const item of json.data) {
-            const sym = (item.symbol || '').toUpperCase();
-            if (EXCLUDED_SYMBOLS.has(sym)) continue;
-            
-            const binanceSymbol = SYMBOL_TO_BINANCE[sym] || `${sym}USDT`;
-            list.push({
-              id: item.id || sym.toLowerCase(),
-              symbol: sym,
-              binanceSymbol,
-              name: item.name || sym,
-              rank: rank++,
-              priceUsd: parseFloat(item.priceUsd) || 0,
-              change24h: parseFloat(item.changePercent24Hr) || 0,
-              marketCapUsd: parseFloat(item.marketCapUsd) || 0,
-            });
-
-            if (list.length >= 100) break;
-          }
-
-          if (list.length >= 50) {
-            this.cachedCoins = list;
-            this.lastFetchTime = now;
-            return list;
-          }
-        }
-      }
-    } catch (e) {
-      console.warn('CoinCap API unavailable, attempting CoinGecko fallback:', e);
-    }
-
-    // Try CoinGecko API fallback
+    // 1. Try CoinGecko API first with expanded limit (up to 250) to account for excluded tokens
     try {
       const response = await fetch(
-        'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=120&page=1&sparkline=false'
+        'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=1&sparkline=false'
       );
       if (response.ok) {
         const data = await response.json();
         if (Array.isArray(data)) {
           const list: CoinInfo[] = [];
-          let rank = 1;
           for (const item of data) {
-            const sym = (item.symbol || '').toUpperCase();
-            if (EXCLUDED_SYMBOLS.has(sym)) continue;
+            const sym = (item.symbol || '').toUpperCase().trim();
+            const id = (item.id || '').toUpperCase().trim();
+            if (EXCLUDED_SYMBOLS.has(sym) || EXCLUDED_SYMBOLS.has(id)) continue;
 
             const binanceSymbol = SYMBOL_TO_BINANCE[sym] || `${sym}USDT`;
             list.push({
@@ -198,7 +177,7 @@ class MarketCapService {
               symbol: sym,
               binanceSymbol,
               name: item.name || sym,
-              rank: rank++,
+              rank: 0,
               priceUsd: item.current_price || 0,
               change24h: item.price_change_percentage_24h || 0,
               marketCapUsd: item.market_cap || 0,
@@ -207,6 +186,32 @@ class MarketCapService {
             if (list.length >= 100) break;
           }
 
+          // Ensure priority user coins are guaranteed in the top 100
+          const missingPriority = PRIORITY_COINS.filter(
+            (p) => !list.some((c) => c.symbol === p.symbol || c.binanceSymbol === p.binanceSymbol)
+          );
+
+          if (list.length + missingPriority.length > 100) {
+            list.splice(100 - missingPriority.length);
+          }
+
+          for (const p of missingPriority) {
+            list.push({
+              id: p.symbol.toLowerCase(),
+              symbol: p.symbol,
+              binanceSymbol: p.binanceSymbol,
+              name: p.name,
+              rank: 0,
+              priceUsd: 0,
+              change24h: 0,
+              marketCapUsd: 0,
+            });
+          }
+
+          list.forEach((c, idx) => {
+            c.rank = idx + 1;
+          });
+
           if (list.length >= 50) {
             this.cachedCoins = list;
             this.lastFetchTime = now;
@@ -215,10 +220,76 @@ class MarketCapService {
         }
       }
     } catch (e) {
-      console.warn('CoinGecko API unavailable, using built-in curated top 100 fallback:', e);
+      console.warn('CoinGecko API unavailable, attempting CoinCap fallback:', e);
     }
 
-    // Curated Fallback
+    // 2. Try CoinCap API
+    try {
+      const response = await fetch('https://api.coincap.io/v2/assets?limit=200', {
+        headers: { 'Accept': 'application/json' }
+      });
+      if (response.ok) {
+        const json = await response.json();
+        if (json.data && Array.isArray(json.data)) {
+          const list: CoinInfo[] = [];
+          for (const item of json.data) {
+            const sym = (item.symbol || '').toUpperCase().trim();
+            const id = (item.id || '').toUpperCase().trim();
+            if (EXCLUDED_SYMBOLS.has(sym) || EXCLUDED_SYMBOLS.has(id)) continue;
+            
+            const binanceSymbol = SYMBOL_TO_BINANCE[sym] || `${sym}USDT`;
+            list.push({
+              id: item.id || sym.toLowerCase(),
+              symbol: sym,
+              binanceSymbol,
+              name: item.name || sym,
+              rank: 0,
+              priceUsd: parseFloat(item.priceUsd) || 0,
+              change24h: parseFloat(item.changePercent24Hr) || 0,
+              marketCapUsd: parseFloat(item.marketCapUsd) || 0,
+            });
+
+            if (list.length >= 100) break;
+          }
+
+          // Ensure priority user coins are guaranteed in the top 100
+          const missingPriority = PRIORITY_COINS.filter(
+            (p) => !list.some((c) => c.symbol === p.symbol || c.binanceSymbol === p.binanceSymbol)
+          );
+
+          if (list.length + missingPriority.length > 100) {
+            list.splice(100 - missingPriority.length);
+          }
+
+          for (const p of missingPriority) {
+            list.push({
+              id: p.symbol.toLowerCase(),
+              symbol: p.symbol,
+              binanceSymbol: p.binanceSymbol,
+              name: p.name,
+              rank: 0,
+              priceUsd: 0,
+              change24h: 0,
+              marketCapUsd: 0,
+            });
+          }
+
+          list.forEach((c, idx) => {
+            c.rank = idx + 1;
+          });
+
+          if (list.length >= 50) {
+            this.cachedCoins = list;
+            this.lastFetchTime = now;
+            return list;
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('CoinCap API unavailable, using built-in curated top 100 fallback:', e);
+    }
+
+    // 3. Curated Fallback
     const fallbackList: CoinInfo[] = FALLBACK_TOP_100.map((item, index) => ({
       id: item.symbol.toLowerCase(),
       symbol: item.symbol,
