@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
-import { Bell, BellOff, Trash2, CheckCircle2, ChevronDown, ChevronUp, Plus } from "lucide-react";
-import { CandleReminder, KlineInterval } from "../types";
+import { Bell, BellOff, Trash2, CheckCircle2, ChevronDown, ChevronUp } from "lucide-react";
+import { CandleReminder } from "../types";
 import { formatCountdown } from "../services/reminderService";
 
 interface RemindersCardProps {
@@ -8,10 +8,7 @@ interface RemindersCardProps {
   onRemoveReminder: (id: string) => void;
   onClearAll: () => void;
   onSelectCoin: (symbol: string) => void;
-  currentSymbol: string;
-  currentInterval: KlineInterval;
-  onToggleReminder: () => void;
-  isCurrentReminderSet: boolean;
+  currentSymbol?: string;
 }
 
 export const RemindersCard: React.FC<RemindersCardProps> = ({
@@ -20,9 +17,6 @@ export const RemindersCard: React.FC<RemindersCardProps> = ({
   onClearAll,
   onSelectCoin,
   currentSymbol,
-  currentInterval,
-  onToggleReminder,
-  isCurrentReminderSet,
 }) => {
   const [isCollapsed, setIsCollapsed] = useState<boolean>(false);
   const [nowMs, setNowMs] = useState<number>(Date.now());
@@ -36,7 +30,6 @@ export const RemindersCard: React.FC<RemindersCardProps> = ({
   }, []);
 
   const activeCount = reminders.filter((r) => !r.triggered).length;
-  const currentBase = currentSymbol.replace(/USDT?$/, "");
 
   // Format epoch ms to IST time string HH:mm:ss
   const formatTimeIST = (ms: number): string => {
@@ -105,48 +98,16 @@ export const RemindersCard: React.FC<RemindersCardProps> = ({
 
       {/* Card Body */}
       {!isCollapsed && (
-        <div className="p-3 flex flex-col gap-2.5">
-          {/* Quick toggle for current open chart */}
-          <div className="flex items-center justify-between p-2 rounded-lg bg-slate-800/40 border border-slate-700/60">
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-bold text-white font-mono">{currentBase}</span>
-              <span className="px-1.5 py-0.2 rounded text-[10px] font-mono font-semibold bg-blue-500/20 text-blue-300 border border-blue-500/30">
-                {currentInterval}
-              </span>
-              <span className="text-[11px] text-slate-400 hidden xs:inline">Next candle reminder</span>
-            </div>
-
-            <button
-              onClick={onToggleReminder}
-              className={`flex items-center gap-1 px-2.5 py-1 rounded text-xs font-mono font-bold transition-all cursor-pointer ${
-                isCurrentReminderSet
-                  ? "bg-amber-500 text-slate-950 shadow-md shadow-amber-900/40"
-                  : "bg-slate-700/80 hover:bg-slate-700 text-slate-200 hover:text-amber-300 border border-slate-600/60"
-              }`}
-            >
-              {isCurrentReminderSet ? (
-                <>
-                  <CheckCircle2 className="w-3.5 h-3.5" />
-                  <span>Set</span>
-                </>
-              ) : (
-                <>
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Set Reminder</span>
-                </>
-              )}
-            </button>
-          </div>
-
+        <div className="p-3 flex flex-col gap-2">
           {/* Reminders List */}
           {reminders.length === 0 ? (
-            <div className="py-6 px-4 text-center rounded-lg border border-dashed border-slate-800 bg-slate-950/40 flex flex-col items-center justify-center gap-2">
+            <div className="py-7 px-4 text-center rounded-lg border border-dashed border-slate-800 bg-slate-950/40 flex flex-col items-center justify-center gap-2">
               <div className="p-2.5 rounded-full bg-slate-800/60 text-slate-500">
                 <BellOff className="w-5 h-5" />
               </div>
               <span className="text-xs font-semibold text-slate-300">No Reminders Set</span>
               <p className="text-[11px] text-slate-400 max-w-[260px] leading-relaxed">
-                Click the <strong className="text-amber-300">🔔 Bell</strong> icon in the chart header or the button above to get alerted with sound when the next candle starts.
+                Click the <strong className="text-amber-300">🔔 Remind</strong> button in the chart header to get alerted with sound when the next candle starts.
               </p>
             </div>
           ) : (

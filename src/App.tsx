@@ -471,9 +471,6 @@ export const App: React.FC = () => {
                   handleSelectCoin(sym, coin?.name || sym.replace('USDT', ''));
                 }}
                 currentSymbol={selectedSymbol}
-                currentInterval={chartInterval}
-                onToggleReminder={handleToggleReminder}
-                isCurrentReminderSet={isCurrentReminderSet}
               />
             )}
           </div>
