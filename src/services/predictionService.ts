@@ -76,6 +76,8 @@ class PredictionService {
       lastCheckedAt: istString,
       status: 'Wrong',
       rightAt: '',
+      checking: 'Yes',
+      notes: 'Active',
     };
 
     // 1. Always save locally so history is immediately accessible
@@ -147,6 +149,8 @@ class PredictionService {
             lastCheckedAt: row.lastCheckedAt,
             status: row.status === 'Right' ? 'Right' : 'Wrong',
             rightAt: row.rightAt,
+            checking: row.checking === 'No' ? 'No' : 'Yes',
+            notes: row.notes || '',
           }));
 
           // Merge with local storage

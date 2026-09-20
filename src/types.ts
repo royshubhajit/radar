@@ -86,6 +86,8 @@ export interface PredictionItem {
   lastCheckedAt?: string;
   status: 'Wrong' | 'Right';
   rightAt?: string;
+  checking?: 'Yes' | 'No';
+  notes?: string;
 }
 
 export interface PredictionConfig {
