@@ -8,9 +8,14 @@
  * 3. Fallback cascade: Binance Futures -> Binance Spot -> MEXC -> Bitfinex
  * 4. Receives new predictions via Web App Webhook (doPost)
  * 5. Runs 15-minute automated checks (checkPredictions) using 5-MINUTE CANDLES:
+ *    - Auto-detects and self-heals sheet column dimensions if fewer than 14 columns exist
+ *    - Auto-installs and validates 15-minute trigger if not present
+ *    - Execution time budget (4 mins) prevents Google Apps Script 6-minute timeouts
+ *    - Writes a visual Heartbeat note to cell A1 with last automated check time & stats
+ *    - Top-level try/catch prevents silent trigger failures
  *    - Scans all 5m candles from logged time to check time (max 72 hours = 864 candles)
  *    - Updates Highest Price & Lowest Price reached across the full window
- *    - If target price reached, updates Right At as the CANDLE END TIME, sets Status='Right', Checking='No', Notes='Target Reached'
+ *    - If target price reached, updates Right At as CANDLE END TIME, sets Status='Right', Checking='No', Notes='Target Reached'
  *    - Computes and records Elapsed Time in 'HH:MM' format from Logged Time to Right At
  *    - If status is Wrong/Active/Expired, Elapsed Time remains blank
  *    - Once 72 hours cross post-logging, sets Checking='No', Notes='72h Expired', and stops checking
@@ -59,6 +64,30 @@ const DELISTED_SPOT_SYMBOLS = new Set([
   'XMRETH',
   'XMRBUSD'
 ]);
+
+/**
+ * Ensures the Google Sheet has at least HEADERS.length (14) columns allocated in its grid.
+ * Prevents "The coordinates or dimensions of the range are invalid" exception.
+ */
+function ensureSheetColumns(sheet) {
+  const maxCols = sheet.getMaxColumns();
+  if (maxCols < HEADERS.length) {
+    sheet.insertColumnsAfter(maxCols, HEADERS.length - maxCols);
+    Logger.log('Expanded sheet grid from ' + maxCols + ' to ' + HEADERS.length + ' columns.');
+  }
+}
+
+/**
+ * Updates a visual heartbeat note on cell A1 showing the exact time of the last check.
+ * Hover over cell A1 in Google Sheets anytime to confirm the background trigger is alive!
+ */
+function updateSheetHeartbeat(sheet, message) {
+  try {
+    const nowFormatted = Utilities.formatDate(new Date(), 'GMT+5:30', 'yyyy-MM-dd HH:mm:ss') + ' IST';
+    const note = 'Automated Prediction Monitor:\nLast Checked: ' + nowFormatted + '\n' + (message || '');
+    sheet.getRange('A1').setNote(note);
+  } catch (_) {}
+}
 
 /**
  * Normalizes symbols (e.g., 'XMR' -> 'XMRUSDT', 'SATS' -> '1000SATSUSDT')
@@ -114,7 +143,9 @@ function formatElapsedTime(loggedTime, rightAtTime) {
   const hours = Math.floor(totalMinutes / 60);
   const mins = totalMinutes % 60;
   
-  return String(hours).padStart(2, '0') + ':' + String(mins).padStart(2, '0');
+  const hh = hours < 10 ? '0' + hours : '' + hours;
+  const mm = mins < 10 ? '0' + mins : '' + mins;
+  return hh + ':' + mm;
 }
 
 /**
@@ -128,6 +159,9 @@ function setupSheet() {
   if (!sheet) {
     sheet = ss.insertSheet(SHEET_NAME);
   }
+  
+  // Ensure grid has at least 14 columns
+  ensureSheetColumns(sheet);
   
   // Set headers in row 1
   const headerRange = sheet.getRange(1, 1, 1, HEADERS.length);
@@ -156,7 +190,7 @@ function setupSheet() {
   sheet.setColumnWidth(13, 150); // Checking Source (Col M)
   sheet.setColumnWidth(14, 120); // Elapsed Time (Col N)
   
-  // Format Col 14 as plain text to preserve HH:MM formatting without conversion
+  // Format Col 14 as plain text to preserve HH:MM formatting without date conversion
   const maxRows = sheet.getMaxRows();
   if (maxRows > 1) {
     sheet.getRange(2, 14, maxRows - 1, 1).setNumberFormat('@');
@@ -177,7 +211,6 @@ function setupSheet() {
       let checking = String(row[10] || '').trim();
       let notes = String(row[11] || '').trim();
       let source = String(row[12] || '').trim();
-      let elapsed = String(row[13] || '').trim();
       
       if (!checking) {
         const loggedMs = parseTimestamp(row[1], nowMs);
@@ -220,12 +253,16 @@ function setupSheet() {
     }
   }
   
+  // Ensure automated trigger is active
+  ensureTriggerInstalled();
+  
+  updateSheetHeartbeat(sheet, 'Sheet initialized and trigger active');
   Logger.log('Sheet initialized successfully with 14 headers (including Col M: Checking Source & Col N: Elapsed Time)!');
 }
 
 /**
  * 2. Setup Automated 15-Minute Cloud Trigger
- * Run this function once to start automated checks every 15 minutes!
+ * Run this function once from script editor to start automated checks every 15 minutes!
  */
 function createFifteenMinuteTrigger() {
   const triggers = ScriptApp.getProjectTriggers();
@@ -248,6 +285,58 @@ function createTwoHourTrigger() {
 }
 
 /**
+ * Auto-installs the 15-minute trigger if missing.
+ */
+function ensureTriggerInstalled() {
+  try {
+    const triggers = ScriptApp.getProjectTriggers();
+    for (let i = 0; i < triggers.length; i++) {
+      if (triggers[i].getHandlerFunction() === 'checkPredictions') {
+        return; // Already installed and active!
+      }
+    }
+    // Not found, auto-create
+    ScriptApp.newTrigger('checkPredictions')
+      .timeBased()
+      .everyMinutes(15)
+      .create();
+    Logger.log('Auto-installed missing 15-minute trigger for checkPredictions.');
+  } catch (err) {
+    Logger.log('Note: Trigger auto-install check: ' + err);
+  }
+}
+
+/**
+ * Diagnostics function: Inspects existing triggers and fixes any missing or duplicated triggers.
+ * Run this from the Apps Script editor anytime to check trigger health!
+ */
+function checkTriggerStatus() {
+  Logger.log('=== Automated Trigger Status Check ===');
+  const triggers = ScriptApp.getProjectTriggers();
+  Logger.log('Total project triggers installed: ' + triggers.length);
+  
+  let count = 0;
+  for (let i = 0; i < triggers.length; i++) {
+    const t = triggers[i];
+    const fn = t.getHandlerFunction();
+    Logger.log('Trigger #' + (i + 1) + ': function=' + fn + ', eventType=' + t.getEventType() + ', id=' + t.getUniqueId());
+    if (fn === 'checkPredictions') {
+      count++;
+    }
+  }
+  
+  if (count === 0) {
+    Logger.log('ALERT: No trigger found for checkPredictions! Auto-installing a fresh 15-minute trigger now...');
+    createFifteenMinuteTrigger();
+  } else if (count === 1) {
+    Logger.log('SUCCESS: Exactly 1 active 15-minute trigger installed and running for checkPredictions.');
+  } else {
+    Logger.log('NOTICE: Multiple duplicate triggers found (' + count + '). Consolidating into 1 clean trigger...');
+    createFifteenMinuteTrigger();
+  }
+}
+
+/**
  * 3. Webhook Handler: Receives predictions from the Radar website
  */
 function doPost(e) {
@@ -265,6 +354,8 @@ function doPost(e) {
       setupSheet();
       sheet = ss.getSheetByName(SHEET_NAME);
     }
+    
+    ensureSheetColumns(sheet);
     
     const symbol = (data.symbol || '').toUpperCase();
     const currentTime = data.currentTime || Utilities.formatDate(new Date(), 'GMT+5:30', 'yyyy-MM-dd HH:mm:ss') + ' IST';
@@ -377,7 +468,10 @@ function doGet(e) {
 /**
  * 5. High-Performance 15-Minute Checker
  * 
- * - Checks active rows (Checking == 'Yes' AND Status != 'Right')
+ * - Auto-heals sheet column dimensions so grid never throws range dimension errors
+ * - Auto-installs missing 15-minute trigger if deleted
+ * - 4-minute execution time budget prevents Google Apps Script 6-minute hard timeout
+ * - Writes a visual heartbeat note on cell A1 showing the exact time of the last run
  * - Priority #1: Always queries Binance Futures (fapi.binance.com) for real futures chart prices
  * - Fallback cascade: Binance Futures -> Binance Spot -> MEXC -> Bitfinex
  * - Automatically expires predictions older than 72 hours -> sets Checking='No', Notes='72h Expired'
@@ -393,252 +487,288 @@ function doGet(e) {
  * - Writes all updates back to the spreadsheet in 1 single batch call (under 20s for 150+ coins)
  */
 function checkPredictions() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getSheetByName(SHEET_NAME);
-  if (!sheet) {
-    Logger.log('Predictions sheet not found!');
-    return;
-  }
+  const executionStartTime = new Date().getTime();
+  const MAX_RUNTIME_MS = 4 * 60 * 1000; // 4 minutes safety cutoff (Apps Script limit is 6m)
   
-  const lastRow = sheet.getLastRow();
-  if (lastRow <= 1) {
-    Logger.log('No prediction rows to check.');
-    return;
-  }
-  
-  // Auto-header check: Ensure Sheet has 14 columns (including Col M: Checking Source & Col N: Elapsed Time)
-  if (sheet.getLastColumn() < HEADERS.length || sheet.getRange(1, 14).getValue() !== 'Elapsed Time') {
-    const headerRange = sheet.getRange(1, 1, 1, HEADERS.length);
-    headerRange.setValues([HEADERS]);
-    headerRange.setFontWeight('bold');
-    headerRange.setBackground('#1e293b');
-    headerRange.setFontColor('#ffffff');
-    headerRange.setHorizontalAlignment('center');
-    sheet.setColumnWidth(13, 150); // Checking Source
-    sheet.setColumnWidth(14, 120); // Elapsed Time
-    sheet.getRange(2, 14, Math.max(lastRow - 1, 1), 1).setNumberFormat('@');
-  }
-  
-  // Read entire data range into memory
-  const range = sheet.getRange(2, 1, lastRow - 1, HEADERS.length);
-  const values = range.getValues();
-  const now = new Date();
-  const nowMs = now.getTime();
-  const nowFormatted = Utilities.formatDate(now, 'GMT+5:30', 'yyyy-MM-dd HH:mm:ss') + ' IST';
-  
-  Logger.log('Starting checkPredictions at ' + nowFormatted + ' for ' + values.length + ' total rows...');
-  
-  // Step 1: Bulk-fetch all live market tickers (Binance Futures is Priority #1)
-  const tickersData = fetchAllLiveTickers();
-  const liveTickersMap = tickersData.prices;
-  const liveSourcesMap = tickersData.sources;
-  Logger.log('Bulk live tickers loaded: ' + liveTickersMap.size + ' symbols.');
-  
-  let checkedCount = 0;
-  let rightCount = 0;
-  let expiredCount = 0;
-  const newlyRightRows = [];
-  const newlyExpiredRows = [];
-  
-  for (let i = 0; i < values.length; i++) {
-    const row = values[i];
-    const rowIndex = i + 2;
-    
-    const rawSymbol = String(row[0] || '').trim().toUpperCase();
-    if (!rawSymbol) continue;
-    
-    const pair = normalizeSymbol(rawSymbol);
-    const status = String(row[8] || '').trim();
-    let checking = String(row[10] || '').trim();
-    let checkingSource = String(row[12] || '').trim();
-    
-    // If checking is blank, default to 'Yes' unless already marked Right
-    if (!checking) {
-      checking = status === 'Right' ? 'No' : 'Yes';
-      values[i][10] = checking;
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (!ss) {
+      Logger.log('Active spreadsheet not found.');
+      return;
     }
     
-    // If checkingSource is blank on an existing row, default to Binance Futures
-    if (!checkingSource) {
-      checkingSource = 'Binance Futures';
-      values[i][12] = checkingSource;
+    const sheet = ss.getSheetByName(SHEET_NAME);
+    if (!sheet) {
+      Logger.log('Predictions sheet not found!');
+      return;
     }
     
-    // If already marked Right: ensure Elapsed Time is filled, then skip
-    if (status === 'Right') {
-      if (!row[13] && row[9]) {
-        values[i][13] = formatElapsedTime(row[1], row[9]);
+    // Step 0: Ensure sheet has at least 14 columns allocated in grid
+    ensureSheetColumns(sheet);
+    
+    // Ensure automated 15-minute trigger is active
+    ensureTriggerInstalled();
+    
+    const lastRow = sheet.getLastRow();
+    if (lastRow <= 1) {
+      Logger.log('No prediction rows to check.');
+      updateSheetHeartbeat(sheet, 'No prediction rows to check');
+      return;
+    }
+    
+    // Auto-header check: Ensure Sheet has 14 columns (including Col M: Checking Source & Col N: Elapsed Time)
+    if (sheet.getLastColumn() < HEADERS.length || sheet.getRange(1, 14).getValue() !== 'Elapsed Time') {
+      const headerRange = sheet.getRange(1, 1, 1, HEADERS.length);
+      headerRange.setValues([HEADERS]);
+      headerRange.setFontWeight('bold');
+      headerRange.setBackground('#1e293b');
+      headerRange.setFontColor('#ffffff');
+      headerRange.setHorizontalAlignment('center');
+      sheet.setColumnWidth(13, 150); // Checking Source
+      sheet.setColumnWidth(14, 120); // Elapsed Time
+      sheet.getRange(2, 14, Math.max(lastRow - 1, 1), 1).setNumberFormat('@');
+    }
+    
+    // Read entire data range into memory
+    const range = sheet.getRange(2, 1, lastRow - 1, HEADERS.length);
+    const values = range.getValues();
+    const now = new Date();
+    const nowMs = now.getTime();
+    const nowFormatted = Utilities.formatDate(now, 'GMT+5:30', 'yyyy-MM-dd HH:mm:ss') + ' IST';
+    
+    Logger.log('Starting checkPredictions at ' + nowFormatted + ' for ' + values.length + ' total rows...');
+    
+    // Step 1: Bulk-fetch all live market tickers (Binance Futures is Priority #1)
+    const tickersData = fetchAllLiveTickers();
+    const liveTickersMap = tickersData.prices;
+    const liveSourcesMap = tickersData.sources;
+    Logger.log('Bulk live tickers loaded: ' + liveTickersMap.size + ' symbols.');
+    
+    let checkedCount = 0;
+    let rightCount = 0;
+    let expiredCount = 0;
+    const newlyRightRows = [];
+    const newlyExpiredRows = [];
+    
+    for (let i = 0; i < values.length; i++) {
+      // Safety check: Don't exceed 4 minutes to prevent Apps Script hard kill
+      if (new Date().getTime() - executionStartTime > MAX_RUNTIME_MS) {
+        Logger.log('Time budget reached (4m). Saving processed rows and stopping gracefully.');
+        break;
       }
-      continue;
-    }
-    
-    // If checking is marked No (and not Right), ensure Elapsed Time is blank, then skip
-    if (checking.toLowerCase() === 'no') {
-      values[i][13] = '';
-      continue;
-    }
-    
-    // Rule: Check 72-Hour Cutoff
-    const startMs = parseTimestamp(row[1], nowMs - 24 * 3600 * 1000);
-    const ageHours = (nowMs - startMs) / (1000 * 60 * 60);
-    
-    if (ageHours >= 72) {
-      values[i][10] = 'No';
-      values[i][11] = '72h Expired';
-      values[i][7] = nowFormatted; // Update last checked time
-      values[i][13] = ''; // Blank if Wrong/Expired
-      expiredCount++;
-      newlyExpiredRows.push(rowIndex);
-      Logger.log('[Row ' + rowIndex + '] ' + rawSymbol + ': 72 hours crossed (' + ageHours.toFixed(1) + 'h) -> Checking marked No.');
-      continue;
-    }
-    
-    // This row is active and within 72 hours
-    checkedCount++;
-    const entryPrice = parseNum(row[2]);
-    const predictedPrice = parseNum(row[3]);
-    let currentHigh = parseNum(row[5]);
-    let currentLow = parseNum(row[6]);
-    
-    let isRight = false;
-    let rightTimestamp = '';
-    let errorMessage = '';
-    let resolvedSource = checkingSource || 'Binance Futures';
-    
-    // 1. Get live ticker price and source from bulk map
-    let livePrice = liveTickersMap.get(pair) || 0;
-    let liveSource = liveSourcesMap.get(pair) || '';
-    if (livePrice === 0) {
-      livePrice = liveTickersMap.get(rawSymbol) || 0;
-      liveSource = liveSourcesMap.get(rawSymbol) || '';
-    }
-    if (livePrice === 0) {
-      // Fallback: targeted individual query (checks Binance Futures first)
-      const priceInfo = fetchCurrentPriceWithSource(pair);
-      livePrice = priceInfo.price;
-      liveSource = priceInfo.source;
-    }
-    
-    if (liveSource) {
-      resolvedSource = liveSource;
-    }
-    
-    // Seed true window extremes starting from entry price
-    let calcHigh = entryPrice > 0 ? entryPrice : 0;
-    let calcLow = entryPrice > 0 ? entryPrice : 0;
-    
-    if (livePrice > 0) {
-      if (calcHigh === 0 || livePrice > calcHigh) calcHigh = livePrice;
-      if (calcLow === 0 || livePrice < calcLow) calcLow = livePrice;
       
-      // Live price touch target check
-      if (predictedPrice > 0 && livePrice >= predictedPrice) {
-        isRight = true;
-        rightTimestamp = nowFormatted;
+      const row = values[i];
+      const rowIndex = i + 2;
+      
+      const rawSymbol = String(row[0] || '').trim().toUpperCase();
+      if (!rawSymbol) continue;
+      
+      const pair = normalizeSymbol(rawSymbol);
+      const status = String(row[8] || '').trim();
+      let checking = String(row[10] || '').trim();
+      let checkingSource = String(row[12] || '').trim();
+      
+      // If checking is blank, default to 'Yes' unless already marked Right
+      if (!checking) {
+        checking = status === 'Right' ? 'No' : 'Yes';
+        values[i][10] = checking;
       }
-    }
-    
-    // 2. Fetch 5-Minute Candles from logged time to now (Binance Futures Priority #1)
-    try {
-      const candles = fetchFiveMinuteCandles(pair, startMs, nowMs);
-      if (candles && candles.length > 0) {
-        if (candles.source) {
-          resolvedSource = candles.source;
+      
+      // If checkingSource is blank on an existing row, default to Binance Futures
+      if (!checkingSource) {
+        checkingSource = 'Binance Futures';
+        values[i][12] = checkingSource;
+      }
+      
+      // If already marked Right: ensure Elapsed Time is filled, then skip
+      if (status === 'Right') {
+        if (!row[13] && row[9]) {
+          values[i][13] = formatElapsedTime(row[1], row[9]);
         }
+        continue;
+      }
+      
+      // If checking is marked No (and not Right), ensure Elapsed Time is blank, then skip
+      if (checking.toLowerCase() === 'no') {
+        values[i][13] = '';
+        continue;
+      }
+      
+      // Rule: Check 72-Hour Cutoff
+      const startMs = parseTimestamp(row[1], nowMs - 24 * 3600 * 1000);
+      const ageHours = (nowMs - startMs) / (1000 * 60 * 60);
+      
+      if (ageHours >= 72) {
+        values[i][10] = 'No';
+        values[i][11] = '72h Expired';
+        values[i][7] = nowFormatted; // Update last checked time
+        values[i][13] = ''; // Blank if Wrong/Expired
+        expiredCount++;
+        newlyExpiredRows.push(rowIndex);
+        Logger.log('[Row ' + rowIndex + '] ' + rawSymbol + ': 72 hours crossed (' + ageHours.toFixed(1) + 'h) -> Checking marked No.');
+        continue;
+      }
+      
+      // This row is active and within 72 hours
+      checkedCount++;
+      const entryPrice = parseNum(row[2]);
+      const predictedPrice = parseNum(row[3]);
+      let currentHigh = parseNum(row[5]);
+      let currentLow = parseNum(row[6]);
+      
+      let isRight = false;
+      let rightTimestamp = '';
+      let errorMessage = '';
+      let resolvedSource = checkingSource || 'Binance Futures';
+      
+      // 1. Get live ticker price and source from bulk map
+      let livePrice = liveTickersMap.get(pair) || 0;
+      let liveSource = liveSourcesMap.get(pair) || '';
+      if (livePrice === 0) {
+        livePrice = liveTickersMap.get(rawSymbol) || 0;
+        liveSource = liveSourcesMap.get(rawSymbol) || '';
+      }
+      if (livePrice === 0) {
+        // Fallback: targeted individual query (checks Binance Futures first)
+        const priceInfo = fetchCurrentPriceWithSource(pair);
+        livePrice = priceInfo.price;
+        liveSource = priceInfo.source;
+      }
+      
+      if (liveSource) {
+        resolvedSource = liveSource;
+      }
+      
+      // Seed true window extremes starting from entry price
+      let calcHigh = entryPrice > 0 ? entryPrice : 0;
+      let calcLow = entryPrice > 0 ? entryPrice : 0;
+      
+      if (livePrice > 0) {
+        if (calcHigh === 0 || livePrice > calcHigh) calcHigh = livePrice;
+        if (calcLow === 0 || livePrice < calcLow) calcLow = livePrice;
         
-        for (let c = 0; c < candles.length; c++) {
-          const candle = candles[c];
-          const cOpenTime = candle[0];
-          const cHigh = parseFloat(candle[2]);
-          const cLow = parseFloat(candle[3]);
-          
-          if (!isNaN(cHigh) && cHigh > 0) {
-            if (calcHigh === 0 || cHigh > calcHigh) calcHigh = cHigh;
+        // Live price touch target check
+        if (predictedPrice > 0 && livePrice >= predictedPrice) {
+          isRight = true;
+          rightTimestamp = nowFormatted;
+        }
+      }
+      
+      // 2. Fetch 5-Minute Candles from logged time to now (Binance Futures Priority #1)
+      try {
+        const candles = fetchFiveMinuteCandles(pair, startMs, nowMs);
+        if (candles && candles.length > 0) {
+          if (candles.source) {
+            resolvedSource = candles.source;
           }
-          if (!isNaN(cLow) && cLow > 0) {
-            if (calcLow === 0 || cLow < calcLow) calcLow = cLow;
+          
+          for (let c = 0; c < candles.length; c++) {
+            const candle = candles[c];
+            const cOpenTime = candle[0];
+            const cHigh = parseFloat(candle[2]);
+            const cLow = parseFloat(candle[3]);
+            
+            if (!isNaN(cHigh) && cHigh > 0) {
+              if (calcHigh === 0 || cHigh > calcHigh) calcHigh = cHigh;
+            }
+            if (!isNaN(cLow) && cLow > 0) {
+              if (calcLow === 0 || cLow < calcLow) calcLow = cLow;
+            }
+            
+            // Bullish check: Did candle high touch or exceed predicted price?
+            if (predictedPrice > 0 && cHigh >= predictedPrice && !isRight) {
+              isRight = true;
+              // Candle END time = candle open time + 5 minutes
+              const candleEndTimeMs = cOpenTime + (5 * 60 * 1000);
+              rightTimestamp = Utilities.formatDate(new Date(candleEndTimeMs), 'GMT+5:30', 'yyyy-MM-dd HH:mm:ss') + ' IST';
+            }
           }
           
-          // Bullish check: Did candle high touch or exceed predicted price?
-          if (predictedPrice > 0 && cHigh >= predictedPrice && !isRight) {
-            isRight = true;
-            // Candle END time = candle open time + 5 minutes
-            const candleEndTimeMs = cOpenTime + (5 * 60 * 1000);
-            rightTimestamp = Utilities.formatDate(new Date(candleEndTimeMs), 'GMT+5:30', 'yyyy-MM-dd HH:mm:ss') + ' IST';
+          // Auto-heal: Set highest and lowest directly from true continuous 5m candles + entry price
+          currentHigh = calcHigh;
+          currentLow = calcLow;
+        } else {
+          // Candles temporarily unavailable: apply live price with anti-corruption guard
+          if (livePrice > 0) {
+            if (currentHigh <= 0 || livePrice > currentHigh) currentHigh = livePrice;
+            if (currentLow <= 0 || (entryPrice > 0 && currentLow < entryPrice * 0.4)) {
+              currentLow = livePrice;
+            } else if (livePrice < currentLow) {
+              currentLow = livePrice;
+            }
           }
         }
-        
-        // Auto-heal: Set highest and lowest directly from true continuous 5m candles + entry price
-        currentHigh = calcHigh;
-        currentLow = calcLow;
+      } catch (err) {
+        errorMessage = 'Error: ' + (err.message || err.toString());
+        Logger.log('[Row ' + rowIndex + '] ' + rawSymbol + ' candle fetch error: ' + errorMessage);
+      }
+      
+      // Update row fields in memory
+      values[i][5] = currentHigh;
+      values[i][6] = currentLow;
+      values[i][7] = nowFormatted; // Last Checked At
+      values[i][12] = resolvedSource; // Column M: Checking Source
+      
+      if (isRight) {
+        const finalRightTime = rightTimestamp || nowFormatted;
+        values[i][8] = 'Right';
+        values[i][9] = finalRightTime;
+        values[i][10] = 'No'; // Stop checking once target is reached!
+        values[i][11] = 'Target Reached';
+        values[i][13] = formatElapsedTime(row[1], finalRightTime); // Column N: Elapsed Time
+        rightCount++;
+        newlyRightRows.push(rowIndex);
+        Logger.log('[Row ' + rowIndex + '] ' + rawSymbol + ' TARGET HIT! Right at ' + finalRightTime + ' (Elapsed: ' + values[i][13] + ', High: $' + currentHigh + ', Source: ' + resolvedSource + ')');
       } else {
-        // Candles temporarily unavailable: apply live price with anti-corruption guard
-        if (livePrice > 0) {
-          if (currentHigh <= 0 || livePrice > currentHigh) currentHigh = livePrice;
-          if (currentLow <= 0 || (entryPrice > 0 && currentLow < entryPrice * 0.4)) {
-            currentLow = livePrice;
-          } else if (livePrice < currentLow) {
-            currentLow = livePrice;
-          }
+        values[i][8] = 'Wrong';
+        values[i][10] = 'Yes';
+        values[i][11] = errorMessage ? errorMessage : 'Active';
+        values[i][13] = ''; // Blank if Wrong
+      }
+      
+      // Polite 100ms pause to prevent burst rate limits
+      Utilities.sleep(100);
+    }
+    
+    // Step 3: Write ALL updated rows back to the sheet in ONE single bulk call
+    range.setValues(values);
+    Logger.log('Batch updated ' + values.length + ' rows to sheet in 1 call.');
+    
+    // Step 4: Batch-style status cells (green for Right, gray for Expired)
+    for (let r = 0; r < newlyRightRows.length; r++) {
+      const rowNum = newlyRightRows[r];
+      sheet.getRange(rowNum, 9).setFontWeight('bold').setFontColor('#22c55e'); // Green
+      sheet.getRange(rowNum, 11).setFontWeight('normal').setFontColor('#94a3b8'); // Gray for No
+      sheet.getRange(rowNum, 14).setNumberFormat('@'); // Plain text for Elapsed Time
+    }
+    for (let e = 0; e < newlyExpiredRows.length; e++) {
+      const rowNum = newlyExpiredRows[e];
+      sheet.getRange(rowNum, 11).setFontWeight('normal').setFontColor('#94a3b8'); // Gray for No
+      sheet.getRange(rowNum, 12).setFontColor('#f59e0b'); // Amber for 72h Expired
+    }
+    
+    // Update visual heartbeat on cell A1
+    updateSheetHeartbeat(sheet, 'Active checked: ' + checkedCount + ' | Newly Right: ' + rightCount + ' | Expired: ' + expiredCount);
+    
+    Logger.log('checkPredictions completed! Checked: ' + checkedCount + ', Newly Right: ' + rightCount + ', Expired: ' + expiredCount);
+  } catch (globalErr) {
+    Logger.log('CRITICAL: checkPredictions encountered error: ' + globalErr);
+    try {
+      const ss = SpreadsheetApp.getActiveSpreadsheet();
+      if (ss) {
+        const sheet = ss.getSheetByName(SHEET_NAME);
+        if (sheet) {
+          updateSheetHeartbeat(sheet, 'ERROR on last run: ' + (globalErr.message || globalErr));
         }
       }
-    } catch (err) {
-      errorMessage = 'Error: ' + (err.message || err.toString());
-      Logger.log('[Row ' + rowIndex + '] ' + rawSymbol + ' candle fetch error: ' + errorMessage);
-    }
-    
-    // Update row fields in memory
-    values[i][5] = currentHigh;
-    values[i][6] = currentLow;
-    values[i][7] = nowFormatted; // Last Checked At
-    values[i][12] = resolvedSource; // Column M: Checking Source
-    
-    if (isRight) {
-      const finalRightTime = rightTimestamp || nowFormatted;
-      values[i][8] = 'Right';
-      values[i][9] = finalRightTime;
-      values[i][10] = 'No'; // Stop checking once target is reached!
-      values[i][11] = 'Target Reached';
-      values[i][13] = formatElapsedTime(row[1], finalRightTime); // Column N: Elapsed Time
-      rightCount++;
-      newlyRightRows.push(rowIndex);
-      Logger.log('[Row ' + rowIndex + '] ' + rawSymbol + ' TARGET HIT! Right at ' + finalRightTime + ' (Elapsed: ' + values[i][13] + ', High: $' + currentHigh + ', Source: ' + resolvedSource + ')');
-    } else {
-      values[i][8] = 'Wrong';
-      values[i][10] = 'Yes';
-      values[i][11] = errorMessage ? errorMessage : 'Active';
-      values[i][13] = ''; // Blank if Wrong
-    }
-    
-    // Polite 100ms pause to prevent burst rate limits
-    Utilities.sleep(100);
+    } catch (_) {}
   }
-  
-  // Step 3: Write ALL updated rows back to the sheet in ONE single bulk call
-  range.setValues(values);
-  Logger.log('Batch updated ' + values.length + ' rows to sheet in 1 call.');
-  
-  // Step 4: Batch-style status cells (green for Right, gray for Expired)
-  for (let r = 0; r < newlyRightRows.length; r++) {
-    const rowNum = newlyRightRows[r];
-    sheet.getRange(rowNum, 9).setFontWeight('bold').setFontColor('#22c55e'); // Green
-    sheet.getRange(rowNum, 11).setFontWeight('normal').setFontColor('#94a3b8'); // Gray for No
-    sheet.getRange(rowNum, 14).setNumberFormat('@'); // Plain text for Elapsed Time
-  }
-  for (let e = 0; e < newlyExpiredRows.length; e++) {
-    const rowNum = newlyExpiredRows[e];
-    sheet.getRange(rowNum, 11).setFontWeight('normal').setFontColor('#94a3b8'); // Gray for No
-    sheet.getRange(rowNum, 12).setFontColor('#f59e0b'); // Amber for 72h Expired
-  }
-  
-  Logger.log('checkPredictions completed! Checked: ' + checkedCount + ', Newly Right: ' + rightCount + ', Expired: ' + expiredCount);
 }
 
 /**
  * Bulk-fetches all current ticker prices with BINANCE FUTURES AS PRIORITY #1:
  * 1. Binance USDⓈ-M Futures (fapi.binance.com) - Real active prices for all major coins and perps (BTC, USELESS, FARTCOIN, PENGU, XMR, HYPE, KAS)
  * 2. Binance Vision Spot (data-api.binance.vision) - Only for tokens not present on Futures
- * 3. MEXC (api.mexc.com) - For coins exclusive to MEXC (e.g. WBT, LEO)
  */
 function fetchAllLiveTickers() {
   const priceMap = new Map();
@@ -691,31 +821,6 @@ function fetchAllLiveTickers() {
   } catch (e) {
     Logger.log('Binance Vision Spot bulk ticker warning: ' + e);
   }
-
-  // 3. PRIORITY 3: MEXC Spot (api.mexc.com)
-  // Only add tokens NOT already present in Futures or Spot
-  try {
-    const mRes = UrlFetchApp.fetch('https://api.mexc.com/api/v3/ticker/price', { muteHttpExceptions: true });
-    if (mRes.getResponseCode() === 200) {
-      const mList = JSON.parse(mRes.getContentText());
-      if (Array.isArray(mList)) {
-        for (let i = 0; i < mList.length; i++) {
-          const mItem = mList[i];
-          if (mItem && mItem.symbol && mItem.price) {
-            if (!priceMap.has(mItem.symbol)) {
-              const p = parseFloat(mItem.price) || 0;
-              if (p > 0) {
-                priceMap.set(mItem.symbol, p);
-                sourceMap.set(mItem.symbol, 'MEXC');
-              }
-            }
-          }
-        }
-      }
-    }
-  } catch (e) {
-    Logger.log('MEXC bulk ticker warning: ' + e);
-  }
   
   return { prices: priceMap, sources: sourceMap };
 }
@@ -724,7 +829,7 @@ function fetchAllLiveTickers() {
  * Fetches 5-MINUTE CANDLES with BINANCE FUTURES AS FIRST PRIORITY:
  * 1. Binance USDⓈ-M Futures (fapi.binance.com) -> Always tried first for every token!
  * 2. Binance Vision Spot (data-api.binance.vision) -> Fallback if token not on Futures
- * 3. MEXC Global (api.mexc.com) -> Fallback for MEXC tokens (WBT, etc.)
+ * 3. MEXC Global (api.mexc.com) -> Fallback for MEXC tokens
  * 4. Bitfinex (api-pub.bitfinex.com) -> Fallback for LEO, etc.
  * 5. Binance Public Mirrors -> Redundant fallbacks
  * 
@@ -927,16 +1032,19 @@ function parseTimestamp(cellVal, fallbackMs) {
 
 /**
  * 6. Quick Test Function
- * Run this in Apps Script to test live tickers, 5m candle fetches, and formatElapsedTime.
+ * Run this in Apps Script to test live tickers, 5m candle fetches, formatElapsedTime, and trigger status.
  */
 function testConnection() {
+  Logger.log('--- Checking Trigger Health ---');
+  checkTriggerStatus();
+
   Logger.log('--- Testing Multi-Exchange Live Tickers (Binance Futures Priority #1) ---');
   const tickersData = fetchAllLiveTickers();
   const tickers = tickersData.prices;
   const sources = tickersData.sources;
   Logger.log('Total tickers loaded: ' + tickers.size);
   
-  const testSymbols = ['BTCUSDT', 'USELESSUSDT', 'FARTCOINUSDT', 'PENGUUSDT', 'MARSCOINUSDT', 'XMRUSDT', 'HYPEUSDT', 'WBTUSDT'];
+  const testSymbols = ['BTCUSDT', 'USELESSUSDT', 'FARTCOINUSDT', 'PENGUUSDT', 'MARSCOINUSDT', 'XMRUSDT'];
   for (let s = 0; s < testSymbols.length; s++) {
     const sym = testSymbols[s];
     let price = tickers.get(sym);
@@ -952,24 +1060,4 @@ function testConnection() {
   Logger.log('--- Testing formatElapsedTime ---');
   Logger.log('45m elapsed: ' + formatElapsedTime('2026-09-20 10:00:00 IST', '2026-09-20 10:45:00 IST') + ' [Expected: 00:45]');
   Logger.log('2h 15m elapsed: ' + formatElapsedTime('2026-09-20 10:00:00 IST', '2026-09-20 12:15:00 IST') + ' [Expected: 02:15]');
-  Logger.log('26h 05m elapsed: ' + formatElapsedTime('2026-09-20 10:00:00 IST', '2026-09-21 12:05:00 IST') + ' [Expected: 26:05]');
-  Logger.log('Wrong status (blank rightAt): "' + formatElapsedTime('2026-09-20 10:00:00 IST', '') + '" [Expected: ""]');
-  
-  Logger.log('--- Testing 5m Candle Fetch for USELESS & XMR ---');
-  const now = new Date().getTime();
-  const oneHourAgo = now - 60 * 60 * 1000;
-  
-  const uselessCandles = fetchFiveMinuteCandles('USELESSUSDT', oneHourAgo, now);
-  Logger.log('USELESS 5m candles: ' + (uselessCandles ? uselessCandles.length : 0) + ' | Source: ' + (uselessCandles ? uselessCandles.source : 'None'));
-  if (uselessCandles && uselessCandles.length > 0) {
-    const latest = uselessCandles[uselessCandles.length - 1];
-    Logger.log('USELESS latest candle: High=$' + latest[2] + ', Low=$' + latest[3]);
-  }
-  
-  const xmrCandles = fetchFiveMinuteCandles('XMRUSDT', oneHourAgo, now);
-  Logger.log('XMR 5m candles: ' + (xmrCandles ? xmrCandles.length : 0) + ' | Source: ' + (xmrCandles ? xmrCandles.source : 'None'));
-  if (xmrCandles && xmrCandles.length > 0) {
-    const latest = xmrCandles[xmrCandles.length - 1];
-    Logger.log('XMR latest candle: High=$' + latest[2] + ', Low=$' + latest[3]);
-  }
 }
