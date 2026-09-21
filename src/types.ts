@@ -88,6 +88,7 @@ export interface PredictionItem {
   rightAt?: string;
   checking?: 'Yes' | 'No';
   notes?: string;
+  checkingSource?: string;
 }
 
 export interface PredictionConfig {

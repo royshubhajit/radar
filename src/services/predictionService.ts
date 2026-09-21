@@ -78,6 +78,7 @@ class PredictionService {
       rightAt: '',
       checking: 'Yes',
       notes: 'Active',
+      checkingSource: 'Binance Futures',
     };
 
     // 1. Always save locally so history is immediately accessible
@@ -100,6 +101,7 @@ class PredictionService {
         currentPrice: newItem.currentPrice,
         predictedPrice: newItem.predictedPrice,
         changePercent: newItem.changePercent,
+        checkingSource: newItem.checkingSource,
       };
 
       // We use Content-Type text/plain and no-cors mode to ensure smooth delivery across Google Apps Script redirects
@@ -151,6 +153,7 @@ class PredictionService {
             rightAt: row.rightAt,
             checking: row.checking === 'No' ? 'No' : 'Yes',
             notes: row.notes || '',
+            checkingSource: row.checkingSource || 'Binance Futures',
           }));
 
           // Merge with local storage

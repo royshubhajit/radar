@@ -1,35 +1,39 @@
 /**
  * Google Apps Script for Crypto Radar Price Predictions
  * 
- * 1. Automatically formats Google Sheet with 12 columns
- * 2. Receives new predictions via Web App Webhook (doPost)
- * 3. Runs 15-minute automated checks (checkPredictions) using 5-MINUTE CANDLES:
+ * 1. Automatically formats Google Sheet with 13 columns (including Col M: Checking Source)
+ * 2. Binance Futures (fapi.binance.com) is ALWAYS Priority #1 for all price & candle checks
+ * 3. Fallback cascade: Binance Futures -> Binance Spot -> MEXC -> Bitfinex
+ * 4. Receives new predictions via Web App Webhook (doPost)
+ * 5. Runs 15-minute automated checks (checkPredictions) using 5-MINUTE CANDLES:
  *    - Scans all 5m candles from logged time to check time (max 72 hours = 864 candles)
  *    - Updates Highest Price & Lowest Price reached across the full window
  *    - If target price reached, updates Right At as the CANDLE END TIME, sets Status='Right', Checking='No', Notes='Target Reached'
  *    - Once 72 hours cross post-logging, sets Checking='No', Notes='72h Expired', and stops checking
  *    - Sets Notes='Error: ...' if an error occurs for manual inspection
+ *    - Identifies and logs the verified data source in Column M ('Binance Futures', 'Binance Spot', 'MEXC', etc.)
  *    - Bulk-fetches tickers and batch-writes to the sheet in 1 single call (under 20s for 150+ rows)
  */
 
 const SHEET_NAME = 'Predictions';
 
 const HEADERS = [
-  'Coin Symbol',      // Col 1
-  'Logged Time',      // Col 2
-  'Current Price',    // Col 3
-  'Predicted Price',  // Col 4
-  'Change %',         // Col 5
-  'Highest Price',    // Col 6
-  'Lowest Price',     // Col 7
-  'Last Checked At',  // Col 8
-  'Status',           // Col 9
-  'Right At',         // Col 10
-  'Checking',         // Col 11: 'Yes' / 'No'
-  'Notes'             // Col 12: 'Active', 'Target Reached', '72h Expired', or 'Error: ...'
+  'Coin Symbol',      // Col 1 (A)
+  'Logged Time',      // Col 2 (B)
+  'Current Price',    // Col 3 (C)
+  'Predicted Price',  // Col 4 (D)
+  'Change %',         // Col 5 (E)
+  'Highest Price',    // Col 6 (F)
+  'Lowest Price',     // Col 7 (G)
+  'Last Checked At',  // Col 8 (H)
+  'Status',           // Col 9 (I)
+  'Right At',         // Col 10 (J)
+  'Checking',         // Col 11 (K): 'Yes' / 'No'
+  'Notes',            // Col 12 (L): 'Active', 'Target Reached', '72h Expired', or 'Error: ...'
+  'Checking Source'   // Col 13 (M): 'Binance Futures', 'Binance Spot', 'MEXC', etc.
 ];
 
-// Symbol mapping for rebrands and trading pairs
+// Symbol mapping for rebrands, 1000x prefixes, and trading pairs
 const SYMBOL_MAPPINGS = {
   'SATS': '1000SATSUSDT',
   '1000SATS': '1000SATSUSDT',
@@ -51,22 +55,6 @@ const DELISTED_SPOT_SYMBOLS = new Set([
   'XMRBTC',
   'XMRETH',
   'XMRBUSD'
-]);
-
-// Routed to Binance USDⓈ-M Futures (fapi.binance.com) where active trading continues with real market price
-const FUTURES_PRIORITY_SYMBOLS = new Set([
-  'XMRUSDT',
-  'HYPEUSDT',
-  'KASUSDT',
-  '1000SATSUSDT',
-  'USELESSUSDT',
-  'FARTCOINUSDT'
-]);
-
-// Routed to MEXC (api.mexc.com)
-const MEXC_PRIORITY_SYMBOLS = new Set([
-  'WBTUSDT',
-  'LEOUSDT'
 ]);
 
 /**
@@ -109,7 +97,7 @@ function isValidCandleData(data, nowMs) {
 }
 
 /**
- * 1. Initial Setup & Migration: Formats sheet with 12 headers and sets column styling
+ * 1. Initial Setup & Migration: Formats sheet with 13 headers and sets column styling
  * Run this function once from the script editor!
  */
 function setupSheet() {
@@ -144,8 +132,9 @@ function setupSheet() {
   sheet.setColumnWidth(10, 170); // Right At (Candle End Time)
   sheet.setColumnWidth(11, 90);  // Checking (Yes / No)
   sheet.setColumnWidth(12, 160); // Notes
+  sheet.setColumnWidth(13, 150); // Checking Source (Col M)
   
-  // Migrate existing rows if needed (populate Col 11 Checking and Col 12 Notes if blank)
+  // Migrate existing rows if needed (populate Col 11 Checking, Col 12 Notes, Col 13 Checking Source)
   const lastRow = sheet.getLastRow();
   if (lastRow > 1) {
     const dataRange = sheet.getRange(2, 1, lastRow - 1, HEADERS.length);
@@ -158,6 +147,7 @@ function setupSheet() {
       const status = String(row[8] || '').trim();
       let checking = String(row[10] || '').trim();
       let notes = String(row[11] || '').trim();
+      let source = String(row[12] || '').trim();
       
       if (!checking) {
         const loggedMs = parseTimestamp(row[1], nowMs);
@@ -174,14 +164,19 @@ function setupSheet() {
         }
         updated = true;
       }
+      
+      if (!source) {
+        vals[r][12] = 'Binance Futures';
+        updated = true;
+      }
     }
     if (updated) {
       dataRange.setValues(vals);
-      Logger.log('Migrated existing rows with Checking and Notes columns.');
+      Logger.log('Migrated existing rows with Checking, Notes, and Checking Source columns.');
     }
   }
   
-  Logger.log('Sheet initialized successfully with 12 headers!');
+  Logger.log('Sheet initialized successfully with 13 headers (including Column M: Checking Source)!');
 }
 
 /**
@@ -242,6 +237,10 @@ function doPost(e) {
     const checking = 'Yes'; // Active checking starts as Yes
     const notes = 'Active'; // Initial note
     
+    // Resolve checking source (Binance Futures is always priority 1)
+    const sourceInfo = fetchCurrentPriceWithSource(symbol);
+    const checkingSource = data.checkingSource || sourceInfo.source || 'Binance Futures';
+    
     sheet.appendRow([
       symbol,
       currentTime,
@@ -254,7 +253,8 @@ function doPost(e) {
       status,
       rightAt,
       checking,
-      notes
+      notes,
+      checkingSource
     ]);
     
     // Format the new row
@@ -266,7 +266,8 @@ function doPost(e) {
     return ContentService.createTextOutput(JSON.stringify({
       status: 'success',
       message: 'Prediction logged successfully',
-      row: lastRow
+      row: lastRow,
+      checkingSource: checkingSource
     })).setMimeType(ContentService.MimeType.JSON);
     
   } catch (err) {
@@ -306,7 +307,8 @@ function doGet(e) {
           status: row[8],
           rightAt: row[9],
           checking: row[10] || 'Yes',
-          notes: row[11] || ''
+          notes: row[11] || '',
+          checkingSource: row[12] || 'Binance Futures'
         });
       }
     }
@@ -327,10 +329,13 @@ function doGet(e) {
 /**
  * 5. High-Performance 15-Minute Checker
  * 
- * - Checks only active rows (Checking == 'Yes' AND Status != 'Right')
+ * - Checks active rows (Checking == 'Yes' AND Status != 'Right')
+ * - Priority #1: Always queries Binance Futures (fapi.binance.com) for real futures chart prices
+ * - Fallback cascade: Binance Futures -> Binance Spot -> MEXC -> Bitfinex
  * - Automatically expires predictions older than 72 hours -> sets Checking='No', Notes='72h Expired'
  * - Uses 5-minute candles exclusively (max 72h = 864 candles, well under the 1,000 limit)
  * - If target is touched, sets Right At as the 5m candle END time, Status='Right', Checking='No', Notes='Target Reached'
+ * - Populates Column M ('Checking Source') with the exact exchange queried
  * - Bulk-fetches live tickers in 1 fast HTTP call
  * - Writes all updates back to the spreadsheet in 1 single batch call (under 20s for 150+ coins)
  */
@@ -348,6 +353,17 @@ function checkPredictions() {
     return;
   }
   
+  // Auto-header check: Ensure Sheet has Column M ('Checking Source') formatted
+  if (sheet.getLastColumn() < HEADERS.length || sheet.getRange(1, 13).getValue() !== 'Checking Source') {
+    const headerRange = sheet.getRange(1, 1, 1, HEADERS.length);
+    headerRange.setValues([HEADERS]);
+    headerRange.setFontWeight('bold');
+    headerRange.setBackground('#1e293b');
+    headerRange.setFontColor('#ffffff');
+    headerRange.setHorizontalAlignment('center');
+    sheet.setColumnWidth(13, 150);
+  }
+  
   // Read entire data range into memory
   const range = sheet.getRange(2, 1, lastRow - 1, HEADERS.length);
   const values = range.getValues();
@@ -357,8 +373,10 @@ function checkPredictions() {
   
   Logger.log('Starting checkPredictions at ' + nowFormatted + ' for ' + values.length + ' total rows...');
   
-  // Step 1: Bulk-fetch all live market tickers in 1 single HTTP request
-  const liveTickersMap = fetchAllLiveTickers();
+  // Step 1: Bulk-fetch all live market tickers (Binance Futures is Priority #1)
+  const tickersData = fetchAllLiveTickers();
+  const liveTickersMap = tickersData.prices;
+  const liveSourcesMap = tickersData.sources;
   Logger.log('Bulk live tickers loaded: ' + liveTickersMap.size + ' symbols.');
   
   let checkedCount = 0;
@@ -377,11 +395,18 @@ function checkPredictions() {
     const pair = normalizeSymbol(rawSymbol);
     const status = String(row[8] || '').trim();
     let checking = String(row[10] || '').trim();
+    let checkingSource = String(row[12] || '').trim();
     
     // If checking is blank, default to 'Yes' unless already marked Right
     if (!checking) {
       checking = status === 'Right' ? 'No' : 'Yes';
       values[i][10] = checking;
+    }
+    
+    // If checkingSource is blank on an existing row, default to Binance Futures
+    if (!checkingSource) {
+      checkingSource = 'Binance Futures';
+      values[i][12] = checkingSource;
     }
     
     // Rule: Skip rows that are already completed (Right or Checking: No)
@@ -413,15 +438,24 @@ function checkPredictions() {
     let isRight = false;
     let rightTimestamp = '';
     let errorMessage = '';
+    let resolvedSource = checkingSource || 'Binance Futures';
     
-    // 1. Get live ticker price from bulk multi-exchange map
+    // 1. Get live ticker price and source from bulk map
     let livePrice = liveTickersMap.get(pair) || 0;
+    let liveSource = liveSourcesMap.get(pair) || '';
     if (livePrice === 0) {
       livePrice = liveTickersMap.get(rawSymbol) || 0;
+      liveSource = liveSourcesMap.get(rawSymbol) || '';
     }
     if (livePrice === 0) {
-      // Fallback: targeted individual query
-      livePrice = fetchCurrentPrice(pair);
+      // Fallback: targeted individual query (checks Binance Futures first)
+      const priceInfo = fetchCurrentPriceWithSource(pair);
+      livePrice = priceInfo.price;
+      liveSource = priceInfo.source;
+    }
+    
+    if (liveSource) {
+      resolvedSource = liveSource;
     }
     
     // Seed true window extremes starting from entry price
@@ -439,10 +473,14 @@ function checkPredictions() {
       }
     }
     
-    // 2. Fetch 5-Minute Candles from logged time to now (max 72h = 864 candles)
+    // 2. Fetch 5-Minute Candles from logged time to now (Binance Futures Priority #1)
     try {
       const candles = fetchFiveMinuteCandles(pair, startMs, nowMs);
       if (candles && candles.length > 0) {
+        if (candles.source) {
+          resolvedSource = candles.source;
+        }
+        
         for (let c = 0; c < candles.length; c++) {
           const candle = candles[c];
           const cOpenTime = candle[0];
@@ -472,7 +510,6 @@ function checkPredictions() {
         // Candles temporarily unavailable: apply live price with anti-corruption guard
         if (livePrice > 0) {
           if (currentHigh <= 0 || livePrice > currentHigh) currentHigh = livePrice;
-          // Guard: do not retain an absurdly low price (e.g. 118 when entry was 280)
           if (currentLow <= 0 || (entryPrice > 0 && currentLow < entryPrice * 0.4)) {
             currentLow = livePrice;
           } else if (livePrice < currentLow) {
@@ -489,6 +526,7 @@ function checkPredictions() {
     values[i][5] = currentHigh;
     values[i][6] = currentLow;
     values[i][7] = nowFormatted; // Last Checked At
+    values[i][12] = resolvedSource; // Column M: Checking Source
     
     if (isRight) {
       values[i][8] = 'Right';
@@ -497,7 +535,7 @@ function checkPredictions() {
       values[i][11] = 'Target Reached';
       rightCount++;
       newlyRightRows.push(rowIndex);
-      Logger.log('[Row ' + rowIndex + '] ' + rawSymbol + ' TARGET HIT! Right at ' + (rightTimestamp || nowFormatted) + ' (High: $' + currentHigh + ')');
+      Logger.log('[Row ' + rowIndex + '] ' + rawSymbol + ' TARGET HIT! Right at ' + (rightTimestamp || nowFormatted) + ' (High: $' + currentHigh + ', Source: ' + resolvedSource + ')');
     } else {
       values[i][8] = 'Wrong';
       values[i][10] = 'Yes';
@@ -528,35 +566,16 @@ function checkPredictions() {
 }
 
 /**
- * Bulk-fetches all current ticker prices across:
- * 1. Binance Spot (Binance Vision cluster - excludes delisted XMR)
- * 2. Binance Futures (fapi.binance.com - gets real active XMR, HYPE, KAS)
- * 3. MEXC (api.mexc.com - gets WBT, LEO, and any alternative tokens)
+ * Bulk-fetches all current ticker prices with BINANCE FUTURES AS PRIORITY #1:
+ * 1. Binance USDⓈ-M Futures (fapi.binance.com) - Real active prices for all major coins and perps (BTC, USELESS, FARTCOIN, PENGU, XMR, HYPE, KAS)
+ * 2. Binance Vision Spot (data-api.binance.vision) - Only for tokens not present on Futures
+ * 3. MEXC (api.mexc.com) - For coins exclusive to MEXC (e.g. WBT, LEO)
  */
 function fetchAllLiveTickers() {
-  const map = new Map();
+  const priceMap = new Map();
+  const sourceMap = new Map();
   
-  // 1. Binance Vision Spot (Non-geo-restricted public cluster)
-  try {
-    const res = UrlFetchApp.fetch('https://data-api.binance.vision/api/v3/ticker/price', { muteHttpExceptions: true });
-    if (res.getResponseCode() === 200) {
-      const list = JSON.parse(res.getContentText());
-      if (Array.isArray(list)) {
-        for (let i = 0; i < list.length; i++) {
-          const item = list[i];
-          if (item && item.symbol && item.price) {
-            // CRITICAL: Skip delisted spot pairs so stale 2024 price never enters the map
-            if (DELISTED_SPOT_SYMBOLS.has(item.symbol)) continue;
-            map.set(item.symbol, parseFloat(item.price) || 0);
-          }
-        }
-      }
-    }
-  } catch (e) {
-    Logger.log('Binance Vision ticker warning: ' + e);
-  }
-  
-  // 2. Binance USDⓈ-M Futures (Real active prices for XMR, HYPE, KAS, etc.)
+  // 1. PRIORITY 1: Binance USDⓈ-M Futures (fapi.binance.com)
   try {
     const fRes = UrlFetchApp.fetch('https://fapi.binance.com/fapi/v1/ticker/price', { muteHttpExceptions: true });
     if (fRes.getResponseCode() === 200) {
@@ -566,19 +585,46 @@ function fetchAllLiveTickers() {
           const fItem = fList[i];
           if (fItem && fItem.symbol && fItem.price) {
             const p = parseFloat(fItem.price) || 0;
-            // Overwrite if futures priority (XMR, HYPE, KAS) or if not yet in map
-            if (FUTURES_PRIORITY_SYMBOLS.has(fItem.symbol) || !map.has(fItem.symbol)) {
-              map.set(fItem.symbol, p);
+            if (p > 0) {
+              priceMap.set(fItem.symbol, p);
+              sourceMap.set(fItem.symbol, 'Binance Futures');
             }
           }
         }
       }
     }
   } catch (e) {
-    Logger.log('Binance Futures ticker warning: ' + e);
+    Logger.log('Binance Futures bulk ticker warning: ' + e);
   }
 
-  // 3. MEXC Spot (Prices for WBT, LEO, etc.)
+  // 2. PRIORITY 2: Binance Vision Spot (Non-geo-restricted public cluster)
+  // Only add tokens NOT already present in Binance Futures
+  try {
+    const res = UrlFetchApp.fetch('https://data-api.binance.vision/api/v3/ticker/price', { muteHttpExceptions: true });
+    if (res.getResponseCode() === 200) {
+      const list = JSON.parse(res.getContentText());
+      if (Array.isArray(list)) {
+        for (let i = 0; i < list.length; i++) {
+          const item = list[i];
+          if (item && item.symbol && item.price) {
+            if (DELISTED_SPOT_SYMBOLS.has(item.symbol)) continue;
+            if (!priceMap.has(item.symbol)) {
+              const p = parseFloat(item.price) || 0;
+              if (p > 0) {
+                priceMap.set(item.symbol, p);
+                sourceMap.set(item.symbol, 'Binance Spot');
+              }
+            }
+          }
+        }
+      }
+    }
+  } catch (e) {
+    Logger.log('Binance Vision Spot bulk ticker warning: ' + e);
+  }
+
+  // 3. PRIORITY 3: MEXC Spot (api.mexc.com)
+  // Only add tokens NOT already present in Futures or Spot
   try {
     const mRes = UrlFetchApp.fetch('https://api.mexc.com/api/v3/ticker/price', { muteHttpExceptions: true });
     if (mRes.getResponseCode() === 200) {
@@ -587,27 +633,33 @@ function fetchAllLiveTickers() {
         for (let i = 0; i < mList.length; i++) {
           const mItem = mList[i];
           if (mItem && mItem.symbol && mItem.price) {
-            const p = parseFloat(mItem.price) || 0;
-            if (MEXC_PRIORITY_SYMBOLS.has(mItem.symbol) || !map.has(mItem.symbol)) {
-              map.set(mItem.symbol, p);
+            if (!priceMap.has(mItem.symbol)) {
+              const p = parseFloat(mItem.price) || 0;
+              if (p > 0) {
+                priceMap.set(mItem.symbol, p);
+                sourceMap.set(mItem.symbol, 'MEXC');
+              }
             }
           }
         }
       }
     }
   } catch (e) {
-    Logger.log('MEXC ticker warning: ' + e);
+    Logger.log('MEXC bulk ticker warning: ' + e);
   }
   
-  return map;
+  return { prices: priceMap, sources: sourceMap };
 }
 
 /**
- * Fetches 5-MINUTE CANDLES with intelligent multi-exchange routing:
- * - XMR, HYPE, KAS -> Binance Futures & MEXC
- * - WBT, LEO -> MEXC & Bitfinex
- * - Standard pairs -> Binance Vision Spot -> MEXC -> Binance Futures -> Mirrors
- * Validates freshness to discard any ancient delisted data.
+ * Fetches 5-MINUTE CANDLES with BINANCE FUTURES AS FIRST PRIORITY:
+ * 1. Binance USDⓈ-M Futures (fapi.binance.com) -> Always tried first for every token!
+ * 2. Binance Vision Spot (data-api.binance.vision) -> Fallback if token not on Futures
+ * 3. MEXC Global (api.mexc.com) -> Fallback for MEXC tokens (WBT, etc.)
+ * 4. Bitfinex (api-pub.bitfinex.com) -> Fallback for LEO, etc.
+ * 5. Binance Public Mirrors -> Redundant fallbacks
+ * 
+ * Attaches the resolved source name to the returned array (e.g. data.source = 'Binance Futures').
  */
 function fetchFiveMinuteCandles(pair, startTime, endTime) {
   const norm = normalizeSymbol(pair);
@@ -621,103 +673,73 @@ function fetchFiveMinuteCandles(pair, startTime, endTime) {
     fetchEnd = fetchStart + 300000; // 5 min forward
   }
   
-  // ROUTE A: Futures Priority (XMR, HYPE, KAS)
-  if (FUTURES_PRIORITY_SYMBOLS.has(norm)) {
-    // A1. Binance Futures (fapi.binance.com)
-    try {
-      const fUrl = 'https://fapi.binance.com/fapi/v1/klines?symbol=' + encodeURIComponent(norm) +
-        '&interval=' + interval + '&startTime=' + fetchStart + '&endTime=' + fetchEnd + '&limit=1000';
-      const fRes = UrlFetchApp.fetch(fUrl, { muteHttpExceptions: true });
-      if (fRes.getResponseCode() === 200) {
-        const fData = JSON.parse(fRes.getContentText());
-        if (isValidCandleData(fData, nowMs)) return fData;
-      }
-    } catch (_) {}
-    
-    // A2. MEXC Global
-    try {
-      const mexcUrl = 'https://api.mexc.com/api/v3/klines?symbol=' + encodeURIComponent(norm) +
-        '&interval=' + interval + '&startTime=' + fetchStart + '&endTime=' + fetchEnd + '&limit=1000';
-      const mexcRes = UrlFetchApp.fetch(mexcUrl, { muteHttpExceptions: true });
-      if (mexcRes.getResponseCode() === 200) {
-        const mData = JSON.parse(mexcRes.getContentText());
-        if (isValidCandleData(mData, nowMs)) return mData;
-      }
-    } catch (_) {}
-    
-    return [];
-  }
-  
-  // ROUTE B: MEXC Priority (WBT, LEO)
-  if (MEXC_PRIORITY_SYMBOLS.has(norm)) {
-    // B1. MEXC Global
-    try {
-      const mexcUrl = 'https://api.mexc.com/api/v3/klines?symbol=' + encodeURIComponent(norm) +
-        '&interval=' + interval + '&startTime=' + fetchStart + '&endTime=' + fetchEnd + '&limit=1000';
-      const mexcRes = UrlFetchApp.fetch(mexcUrl, { muteHttpExceptions: true });
-      if (mexcRes.getResponseCode() === 200) {
-        const mData = JSON.parse(mexcRes.getContentText());
-        if (isValidCandleData(mData, nowMs)) return mData;
-      }
-    } catch (_) {}
-    
-    // B2. If LEOUSDT, try Bitfinex
-    if (norm === 'LEOUSDT') {
-      try {
-        const bfxUrl = 'https://api-pub.bitfinex.com/v2/candles/trade:5m:tLEOUSD/hist?start=' + fetchStart + '&end=' + fetchEnd + '&limit=1000';
-        const bfxRes = UrlFetchApp.fetch(bfxUrl, { muteHttpExceptions: true });
-        if (bfxRes.getResponseCode() === 200) {
-          const bData = JSON.parse(bfxRes.getContentText());
-          if (Array.isArray(bData) && bData.length > 0) {
-            const reversed = bData.slice().reverse();
-            const mapped = reversed.map(function(c) {
-              return [c[0], c[1], c[3], c[4], c[2], c[5]];
-            });
-            if (isValidCandleData(mapped, nowMs)) return mapped;
-          }
-        }
-      } catch (_) {}
-    }
-    
-    return [];
-  }
-  
-  // ROUTE C: Standard Tokens (BTC, SOL, ETH, DOGE, etc.)
-  // C1. Binance Vision Spot (Non-geo-restricted public cluster)
-  try {
-    const visionUrl = 'https://data-api.binance.vision/api/v3/klines?symbol=' + encodeURIComponent(norm) +
-      '&interval=' + interval + '&startTime=' + fetchStart + '&endTime=' + fetchEnd + '&limit=1000';
-    const visionRes = UrlFetchApp.fetch(visionUrl, { muteHttpExceptions: true });
-    if (visionRes.getResponseCode() === 200) {
-      const data = JSON.parse(visionRes.getContentText());
-      if (isValidCandleData(data, nowMs)) return data;
-    }
-  } catch (_) {}
-  
-  // C2. MEXC Global
-  try {
-    const mexcUrl = 'https://api.mexc.com/api/v3/klines?symbol=' + encodeURIComponent(norm) +
-      '&interval=' + interval + '&startTime=' + fetchStart + '&endTime=' + fetchEnd + '&limit=1000';
-    const mexcRes = UrlFetchApp.fetch(mexcUrl, { muteHttpExceptions: true });
-    if (mexcRes.getResponseCode() === 200) {
-      const mData = JSON.parse(mexcRes.getContentText());
-      if (isValidCandleData(mData, nowMs)) return mData;
-    }
-  } catch (_) {}
-  
-  // C3. Binance Futures
+  // PRIORITY 1: Binance USDⓈ-M Futures (fapi.binance.com) ALWAYS FIRST!
   try {
     const fUrl = 'https://fapi.binance.com/fapi/v1/klines?symbol=' + encodeURIComponent(norm) +
       '&interval=' + interval + '&startTime=' + fetchStart + '&endTime=' + fetchEnd + '&limit=1000';
     const fRes = UrlFetchApp.fetch(fUrl, { muteHttpExceptions: true });
     if (fRes.getResponseCode() === 200) {
       const fData = JSON.parse(fRes.getContentText());
-      if (isValidCandleData(fData, nowMs)) return fData;
+      if (isValidCandleData(fData, nowMs)) {
+        fData.source = 'Binance Futures';
+        return fData;
+      }
     }
   } catch (_) {}
   
-  // C4. Binance US & Public Mirrors
-  const mirrors = ['https://api.binance.us', 'https://api1.binance.com', 'https://api2.binance.com', 'https://api.binance.com'];
+  // PRIORITY 2: Binance Vision Spot (data-api.binance.vision)
+  if (!DELISTED_SPOT_SYMBOLS.has(norm)) {
+    try {
+      const visionUrl = 'https://data-api.binance.vision/api/v3/klines?symbol=' + encodeURIComponent(norm) +
+        '&interval=' + interval + '&startTime=' + fetchStart + '&endTime=' + fetchEnd + '&limit=1000';
+      const visionRes = UrlFetchApp.fetch(visionUrl, { muteHttpExceptions: true });
+      if (visionRes.getResponseCode() === 200) {
+        const data = JSON.parse(visionRes.getContentText());
+        if (isValidCandleData(data, nowMs)) {
+          data.source = 'Binance Spot';
+          return data;
+        }
+      }
+    } catch (_) {}
+  }
+  
+  // PRIORITY 3: MEXC Global (api.mexc.com)
+  try {
+    const mexcUrl = 'https://api.mexc.com/api/v3/klines?symbol=' + encodeURIComponent(norm) +
+      '&interval=' + interval + '&startTime=' + fetchStart + '&endTime=' + fetchEnd + '&limit=1000';
+    const mexcRes = UrlFetchApp.fetch(mexcUrl, { muteHttpExceptions: true });
+    if (mexcRes.getResponseCode() === 200) {
+      const mData = JSON.parse(mexcRes.getContentText());
+      if (isValidCandleData(mData, nowMs)) {
+        mData.source = 'MEXC';
+        return mData;
+      }
+    }
+  } catch (_) {}
+  
+  // PRIORITY 4: Bitfinex (for LEO etc.)
+  if (norm === 'LEOUSDT' || norm === 'LEOUSD') {
+    try {
+      const bfxUrl = 'https://api-pub.bitfinex.com/v2/candles/trade:5m:tLEOUSD/hist?start=' + fetchStart + '&end=' + fetchEnd + '&limit=1000';
+      const bfxRes = UrlFetchApp.fetch(bfxUrl, { muteHttpExceptions: true });
+      if (bfxRes.getResponseCode() === 200) {
+        const bData = JSON.parse(bfxRes.getContentText());
+        if (Array.isArray(bData) && bData.length > 0) {
+          const reversed = bData.slice().reverse();
+          const mapped = reversed.map(function(c) {
+            return [c[0], c[1], c[3], c[4], c[2], c[5]];
+          });
+          if (isValidCandleData(mapped, nowMs)) {
+            mapped.source = 'Bitfinex';
+            return mapped;
+          }
+        }
+      }
+    } catch (_) {}
+  }
+  
+  // PRIORITY 5: Binance US & Public Mirrors
+  const mirrors = ['https://api1.binance.com', 'https://api2.binance.com', 'https://api3.binance.com', 'https://api.binance.us'];
   for (let m = 0; m < mirrors.length; m++) {
     try {
       const u = mirrors[m] + '/api/v3/klines?symbol=' + encodeURIComponent(norm) +
@@ -725,7 +747,10 @@ function fetchFiveMinuteCandles(pair, startTime, endTime) {
       const r = UrlFetchApp.fetch(u, { muteHttpExceptions: true });
       if (r.getResponseCode() === 200) {
         const d = JSON.parse(r.getContentText());
-        if (isValidCandleData(d, nowMs)) return d;
+        if (isValidCandleData(d, nowMs)) {
+          d.source = 'Binance Spot';
+          return d;
+        }
       }
     } catch (_) {}
   }
@@ -743,63 +768,57 @@ function fetchBinanceCandles(symbol, startTime, endTime) {
 }
 
 /**
- * Individual ticker price fetcher with multi-exchange fallback
+ * Individual ticker price fetcher with source reporting:
+ * Priority #1: Binance Futures (fapi.binance.com)
+ * Priority #2: Binance Spot (data-api.binance.vision)
+ * Priority #3: MEXC (api.mexc.com)
  */
-function fetchCurrentPrice(pair) {
+function fetchCurrentPriceWithSource(pair) {
   const norm = normalizeSymbol(pair);
   
-  // 1. Futures Priority (XMR, HYPE, KAS) -> Check Binance Futures first!
-  if (FUTURES_PRIORITY_SYMBOLS.has(norm)) {
-    try {
-      const res = UrlFetchApp.fetch('https://fapi.binance.com/fapi/v1/ticker/price?symbol=' + encodeURIComponent(norm), { muteHttpExceptions: true });
-      if (res.getResponseCode() === 200) {
-        const data = JSON.parse(res.getContentText());
-        if (data && data.price) return parseFloat(data.price) || 0;
+  // 1. PRIORITY 1: Binance Futures (fapi.binance.com) ALWAYS FIRST!
+  try {
+    const res = UrlFetchApp.fetch('https://fapi.binance.com/fapi/v1/ticker/price?symbol=' + encodeURIComponent(norm), { muteHttpExceptions: true });
+    if (res.getResponseCode() === 200) {
+      const data = JSON.parse(res.getContentText());
+      if (data && data.price) {
+        const p = parseFloat(data.price) || 0;
+        if (p > 0) return { price: p, source: 'Binance Futures' };
       }
-    } catch (_) {}
-  }
+    }
+  } catch (_) {}
   
-  // 2. MEXC Priority (WBT, LEO) -> Check MEXC first!
-  if (MEXC_PRIORITY_SYMBOLS.has(norm)) {
-    try {
-      const mRes = UrlFetchApp.fetch('https://api.mexc.com/api/v3/ticker/price?symbol=' + encodeURIComponent(norm), { muteHttpExceptions: true });
-      if (mRes.getResponseCode() === 200) {
-        const mData = JSON.parse(mRes.getContentText());
-        if (mData && mData.price) return parseFloat(mData.price) || 0;
-      }
-    } catch (_) {}
-  }
-  
-  // 3. Binance Vision Spot (Only if not delisted on spot)
+  // 2. PRIORITY 2: Binance Vision Spot (Only if not delisted on spot)
   if (!DELISTED_SPOT_SYMBOLS.has(norm)) {
     try {
       const res = UrlFetchApp.fetch('https://data-api.binance.vision/api/v3/ticker/price?symbol=' + encodeURIComponent(norm), { muteHttpExceptions: true });
       if (res.getResponseCode() === 200) {
         const data = JSON.parse(res.getContentText());
-        if (data && data.price) return parseFloat(data.price) || 0;
+        if (data && data.price) {
+          const p = parseFloat(data.price) || 0;
+          if (p > 0) return { price: p, source: 'Binance Spot' };
+        }
       }
     } catch (_) {}
   }
   
-  // 4. Binance Futures general fallback
-  try {
-    const fRes = UrlFetchApp.fetch('https://fapi.binance.com/fapi/v1/ticker/price?symbol=' + encodeURIComponent(norm), { muteHttpExceptions: true });
-    if (fRes.getResponseCode() === 200) {
-      const fData = JSON.parse(fRes.getContentText());
-      if (fData && fData.price) return parseFloat(fData.price) || 0;
-    }
-  } catch (_) {}
-  
-  // 5. MEXC general fallback
+  // 3. PRIORITY 3: MEXC Global
   try {
     const mRes = UrlFetchApp.fetch('https://api.mexc.com/api/v3/ticker/price?symbol=' + encodeURIComponent(norm), { muteHttpExceptions: true });
     if (mRes.getResponseCode() === 200) {
       const mData = JSON.parse(mRes.getContentText());
-      if (mData && mData.price) return parseFloat(mData.price) || 0;
+      if (mData && mData.price) {
+        const p = parseFloat(mData.price) || 0;
+        if (p > 0) return { price: p, source: 'MEXC' };
+      }
     }
   } catch (_) {}
   
-  return 0;
+  return { price: 0, source: 'Unknown' };
+}
+
+function fetchCurrentPrice(pair) {
+  return fetchCurrentPriceWithSource(pair).price;
 }
 
 /**
@@ -839,33 +858,44 @@ function parseTimestamp(cellVal, fallbackMs) {
 
 /**
  * 6. Quick Test Function
- * Select and run this in Apps Script to verify live multi-exchange tickers,
- * specifically verifying that XMR returns real market price (> $200) and NOT stale $118!
+ * Select and run this in Apps Script to verify live tickers and 5m candles,
+ * demonstrating Binance Futures priority for USELESS, FARTCOIN, PENGU, MARSCOIN, XMR, BTC, etc.
  */
 function testConnection() {
-  Logger.log('--- Testing Multi-Exchange Live Tickers ---');
-  const tickers = fetchAllLiveTickers();
+  Logger.log('--- Testing Multi-Exchange Live Tickers (Binance Futures Priority #1) ---');
+  const tickersData = fetchAllLiveTickers();
+  const tickers = tickersData.prices;
+  const sources = tickersData.sources;
   Logger.log('Total tickers loaded: ' + tickers.size);
   
-  const btcPrice = tickers.get('BTCUSDT') || fetchCurrentPrice('BTCUSDT');
-  const xmrPrice = tickers.get('XMRUSDT') || fetchCurrentPrice('XMRUSDT');
-  const hypePrice = tickers.get('HYPEUSDT') || fetchCurrentPrice('HYPEUSDT');
-  const wbtPrice = tickers.get('WBTUSDT') || fetchCurrentPrice('WBTUSDT');
+  const testSymbols = ['BTCUSDT', 'USELESSUSDT', 'FARTCOINUSDT', 'PENGUUSDT', 'MARSCOINUSDT', 'XMRUSDT', 'HYPEUSDT', 'WBTUSDT'];
+  for (let s = 0; s < testSymbols.length; s++) {
+    const sym = testSymbols[s];
+    let price = tickers.get(sym);
+    let src = sources.get(sym);
+    if (!price) {
+      const info = fetchCurrentPriceWithSource(sym);
+      price = info.price;
+      src = info.source;
+    }
+    Logger.log(sym + ' -> Price: $' + price + ' | Checking Source: ' + src);
+  }
   
-  Logger.log('BTC Price: $' + btcPrice);
-  Logger.log('XMR (Monero) Price: $' + xmrPrice + (xmrPrice > 200 ? ' [VERIFIED CORRECT LIVE PRICE!]' : ' [WARNING: Stale price!]'));
-  Logger.log('HYPE Price: $' + hypePrice);
-  Logger.log('WBT Price: $' + wbtPrice);
-  
-  Logger.log('--- Testing 5m Candle Fetch for XMR (Monero) ---');
+  Logger.log('--- Testing 5m Candle Fetch for USELESS & XMR ---');
   const now = new Date().getTime();
   const oneHourAgo = now - 60 * 60 * 1000;
+  
+  const uselessCandles = fetchFiveMinuteCandles('USELESSUSDT', oneHourAgo, now);
+  Logger.log('USELESS 5m candles: ' + (uselessCandles ? uselessCandles.length : 0) + ' | Source: ' + (uselessCandles ? uselessCandles.source : 'None'));
+  if (uselessCandles && uselessCandles.length > 0) {
+    const latest = uselessCandles[uselessCandles.length - 1];
+    Logger.log('USELESS latest candle: High=$' + latest[2] + ', Low=$' + latest[3]);
+  }
+  
   const xmrCandles = fetchFiveMinuteCandles('XMRUSDT', oneHourAgo, now);
-  Logger.log('XMR 5m candles returned: ' + (xmrCandles ? xmrCandles.length : 0));
+  Logger.log('XMR 5m candles: ' + (xmrCandles ? xmrCandles.length : 0) + ' | Source: ' + (xmrCandles ? xmrCandles.source : 'None'));
   if (xmrCandles && xmrCandles.length > 0) {
-    const latestCandle = xmrCandles[xmrCandles.length - 1];
-    const cHigh = latestCandle[2];
-    const cLow = latestCandle[3];
-    Logger.log('Latest XMR 5m candle: High=$' + cHigh + ', Low=$' + cLow);
+    const latest = xmrCandles[xmrCandles.length - 1];
+    Logger.log('XMR latest candle: High=$' + latest[2] + ', Low=$' + latest[3]);
   }
 }
