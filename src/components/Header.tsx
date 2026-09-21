@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { ScannerConfig, ScannerStatus } from '../types';
 import { soundService } from '../services/soundService';
+import { getCurrentUser, logout } from '../services/authService';
 import {
   Flame,
   Volume2,
@@ -8,7 +9,9 @@ import {
   RefreshCw,
   Clock,
   Sliders,
-  BellRing
+  BellRing,
+  LogOut,
+  User as UserIcon
 } from 'lucide-react';
 
 interface HeaderProps {
@@ -28,6 +31,7 @@ export const Header: React.FC<HeaderProps> = ({
   onTriggerScan,
   totalAlertsCount,
 }) => {
+  const currentUser = getCurrentUser();
   const [customThreshold, setCustomThreshold] = useState<string>(config.thresholdPercent.toString());
 
   const handleThresholdSelect = (val: number) => {
@@ -185,6 +189,35 @@ export const Header: React.FC<HeaderProps> = ({
               <span className="text-slate-400 hidden sm:inline">Close:</span>
               <span className="text-blue-400 font-bold">{formatCountdown(status.nextScanIn)}</span>
             </div>
+
+            {/* User Profile & Sign Out */}
+            {currentUser && (
+              <div className="flex items-center gap-1.5 pl-1 sm:pl-2 border-l border-[#242e42]">
+                <div
+                  className="flex items-center gap-1.5 px-2 py-1 rounded-lg sm:rounded-xl bg-[#0b0e14] border border-[#242e42] text-[11px] font-mono text-slate-300 max-w-[140px] sm:max-w-[190px]"
+                  title={`Signed in as ${currentUser.email}`}
+                >
+                  {currentUser.photoURL ? (
+                    <img
+                      src={currentUser.photoURL}
+                      alt="Avatar"
+                      className="w-4 h-4 rounded-full border border-slate-700 shrink-0"
+                    />
+                  ) : (
+                    <UserIcon className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                  )}
+                  <span className="truncate hidden sm:inline">{currentUser.displayName || currentUser.email}</span>
+                </div>
+
+                <button
+                  onClick={() => logout()}
+                  className="p-1 sm:p-1.5 rounded-lg sm:rounded-xl bg-[#0b0e14] hover:bg-rose-500/15 border border-[#242e42] hover:border-rose-500/40 text-slate-400 hover:text-rose-400 transition-all flex items-center justify-center"
+                  title="Sign Out"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </div>
