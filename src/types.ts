@@ -89,6 +89,7 @@ export interface PredictionItem {
   checking?: 'Yes' | 'No';
   notes?: string;
   checkingSource?: string;
+  elapsedTime?: string;
 }
 
 export interface PredictionConfig {

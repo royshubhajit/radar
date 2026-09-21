@@ -79,6 +79,7 @@ class PredictionService {
       checking: 'Yes',
       notes: 'Active',
       checkingSource: 'Binance Futures',
+      elapsedTime: '',
     };
 
     // 1. Always save locally so history is immediately accessible
@@ -154,6 +155,7 @@ class PredictionService {
             checking: row.checking === 'No' ? 'No' : 'Yes',
             notes: row.notes || '',
             checkingSource: row.checkingSource || 'Binance Futures',
+            elapsedTime: row.elapsedTime || '',
           }));
 
           // Merge with local storage

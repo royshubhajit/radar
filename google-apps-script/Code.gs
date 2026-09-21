@@ -1,7 +1,9 @@
 /**
  * Google Apps Script for Crypto Radar Price Predictions
  * 
- * 1. Automatically formats Google Sheet with 13 columns (including Col M: Checking Source)
+ * 1. Automatically formats Google Sheet with 14 columns:
+ *    - Col M (13): Checking Source ('Binance Futures', 'Binance Spot', 'MEXC', etc.)
+ *    - Col N (14): Elapsed Time ('HH:MM' from Logged Time to Right At, blank if Wrong)
  * 2. Binance Futures (fapi.binance.com) is ALWAYS Priority #1 for all price & candle checks
  * 3. Fallback cascade: Binance Futures -> Binance Spot -> MEXC -> Bitfinex
  * 4. Receives new predictions via Web App Webhook (doPost)
@@ -9,9 +11,9 @@
  *    - Scans all 5m candles from logged time to check time (max 72 hours = 864 candles)
  *    - Updates Highest Price & Lowest Price reached across the full window
  *    - If target price reached, updates Right At as the CANDLE END TIME, sets Status='Right', Checking='No', Notes='Target Reached'
+ *    - Computes and records Elapsed Time in 'HH:MM' format from Logged Time to Right At
+ *    - If status is Wrong/Active/Expired, Elapsed Time remains blank
  *    - Once 72 hours cross post-logging, sets Checking='No', Notes='72h Expired', and stops checking
- *    - Sets Notes='Error: ...' if an error occurs for manual inspection
- *    - Identifies and logs the verified data source in Column M ('Binance Futures', 'Binance Spot', 'MEXC', etc.)
  *    - Bulk-fetches tickers and batch-writes to the sheet in 1 single call (under 20s for 150+ rows)
  */
 
@@ -30,7 +32,8 @@ const HEADERS = [
   'Right At',         // Col 10 (J)
   'Checking',         // Col 11 (K): 'Yes' / 'No'
   'Notes',            // Col 12 (L): 'Active', 'Target Reached', '72h Expired', or 'Error: ...'
-  'Checking Source'   // Col 13 (M): 'Binance Futures', 'Binance Spot', 'MEXC', etc.
+  'Checking Source',  // Col 13 (M): 'Binance Futures', 'Binance Spot', 'MEXC', etc.
+  'Elapsed Time'      // Col 14 (N): 'HH:MM' from Logged Time to Right At (blank if Wrong)
 ];
 
 // Symbol mapping for rebrands, 1000x prefixes, and trading pairs
@@ -97,7 +100,25 @@ function isValidCandleData(data, nowMs) {
 }
 
 /**
- * 1. Initial Setup & Migration: Formats sheet with 13 headers and sets column styling
+ * Calculates elapsed time in HH:MM format from loggedTime to rightAtTime.
+ * Returns blank '' if either time is missing or invalid.
+ */
+function formatElapsedTime(loggedTime, rightAtTime) {
+  if (!loggedTime || !rightAtTime) return '';
+  const startMs = parseTimestamp(loggedTime, 0);
+  const endMs = parseTimestamp(rightAtTime, 0);
+  if (startMs <= 0 || endMs <= 0 || endMs < startMs) return '';
+  
+  const diffMs = endMs - startMs;
+  const totalMinutes = Math.round(diffMs / (60 * 1000));
+  const hours = Math.floor(totalMinutes / 60);
+  const mins = totalMinutes % 60;
+  
+  return String(hours).padStart(2, '0') + ':' + String(mins).padStart(2, '0');
+}
+
+/**
+ * 1. Initial Setup & Migration: Formats sheet with 14 headers and sets column styling
  * Run this function once from the script editor!
  */
 function setupSheet() {
@@ -133,8 +154,15 @@ function setupSheet() {
   sheet.setColumnWidth(11, 90);  // Checking (Yes / No)
   sheet.setColumnWidth(12, 160); // Notes
   sheet.setColumnWidth(13, 150); // Checking Source (Col M)
+  sheet.setColumnWidth(14, 120); // Elapsed Time (Col N)
   
-  // Migrate existing rows if needed (populate Col 11 Checking, Col 12 Notes, Col 13 Checking Source)
+  // Format Col 14 as plain text to preserve HH:MM formatting without conversion
+  const maxRows = sheet.getMaxRows();
+  if (maxRows > 1) {
+    sheet.getRange(2, 14, maxRows - 1, 1).setNumberFormat('@');
+  }
+  
+  // Migrate existing rows if needed
   const lastRow = sheet.getLastRow();
   if (lastRow > 1) {
     const dataRange = sheet.getRange(2, 1, lastRow - 1, HEADERS.length);
@@ -145,9 +173,11 @@ function setupSheet() {
     for (let r = 0; r < vals.length; r++) {
       const row = vals[r];
       const status = String(row[8] || '').trim();
+      const rightAt = row[9];
       let checking = String(row[10] || '').trim();
       let notes = String(row[11] || '').trim();
       let source = String(row[12] || '').trim();
+      let elapsed = String(row[13] || '').trim();
       
       if (!checking) {
         const loggedMs = parseTimestamp(row[1], nowMs);
@@ -169,14 +199,28 @@ function setupSheet() {
         vals[r][12] = 'Binance Futures';
         updated = true;
       }
+      
+      // Calculate Elapsed Time for Right predictions, blank for Wrong
+      if (status === 'Right' && rightAt) {
+        const calcElapsed = formatElapsedTime(row[1], rightAt);
+        if (calcElapsed && vals[r][13] !== calcElapsed) {
+          vals[r][13] = calcElapsed;
+          updated = true;
+        }
+      } else {
+        if (vals[r][13] !== '') {
+          vals[r][13] = '';
+          updated = true;
+        }
+      }
     }
     if (updated) {
       dataRange.setValues(vals);
-      Logger.log('Migrated existing rows with Checking, Notes, and Checking Source columns.');
+      Logger.log('Migrated existing rows with Checking, Notes, Checking Source, and Elapsed Time columns.');
     }
   }
   
-  Logger.log('Sheet initialized successfully with 13 headers (including Column M: Checking Source)!');
+  Logger.log('Sheet initialized successfully with 14 headers (including Col M: Checking Source & Col N: Elapsed Time)!');
 }
 
 /**
@@ -236,6 +280,7 @@ function doPost(e) {
     const rightAt = '';     // Empty until price touches or exceeds predicted price
     const checking = 'Yes'; // Active checking starts as Yes
     const notes = 'Active'; // Initial note
+    const elapsedTime = ''; // Blank when status is Wrong
     
     // Resolve checking source (Binance Futures is always priority 1)
     const sourceInfo = fetchCurrentPriceWithSource(symbol);
@@ -254,13 +299,15 @@ function doPost(e) {
       rightAt,
       checking,
       notes,
-      checkingSource
+      checkingSource,
+      elapsedTime
     ]);
     
     // Format the new row
     const lastRow = sheet.getLastRow();
     sheet.getRange(lastRow, 9).setFontWeight('bold').setFontColor('#ef4444'); // Red text for Wrong
     sheet.getRange(lastRow, 11).setFontWeight('bold').setFontColor('#3b82f6'); // Blue for Checking: Yes
+    sheet.getRange(lastRow, 14).setNumberFormat('@'); // Plain text format for Elapsed Time
     sheet.getRange(lastRow, 1, 1, HEADERS.length).setHorizontalAlignment('center');
     
     return ContentService.createTextOutput(JSON.stringify({
@@ -308,7 +355,8 @@ function doGet(e) {
           rightAt: row[9],
           checking: row[10] || 'Yes',
           notes: row[11] || '',
-          checkingSource: row[12] || 'Binance Futures'
+          checkingSource: row[12] || 'Binance Futures',
+          elapsedTime: row[13] || ''
         });
       }
     }
@@ -334,8 +382,13 @@ function doGet(e) {
  * - Fallback cascade: Binance Futures -> Binance Spot -> MEXC -> Bitfinex
  * - Automatically expires predictions older than 72 hours -> sets Checking='No', Notes='72h Expired'
  * - Uses 5-minute candles exclusively (max 72h = 864 candles, well under the 1,000 limit)
- * - If target is touched, sets Right At as the 5m candle END time, Status='Right', Checking='No', Notes='Target Reached'
+ * - If target is touched:
+ *     - sets Right At as the 5m candle END time
+ *     - Status='Right', Checking='No', Notes='Target Reached'
+ *     - calculates Elapsed Time in 'HH:MM' format from Logged Time to Right At
+ * - If status is Wrong/Expired, Elapsed Time remains blank
  * - Populates Column M ('Checking Source') with the exact exchange queried
+ * - Populates Column N ('Elapsed Time') with 'HH:MM' format
  * - Bulk-fetches live tickers in 1 fast HTTP call
  * - Writes all updates back to the spreadsheet in 1 single batch call (under 20s for 150+ coins)
  */
@@ -353,15 +406,17 @@ function checkPredictions() {
     return;
   }
   
-  // Auto-header check: Ensure Sheet has Column M ('Checking Source') formatted
-  if (sheet.getLastColumn() < HEADERS.length || sheet.getRange(1, 13).getValue() !== 'Checking Source') {
+  // Auto-header check: Ensure Sheet has 14 columns (including Col M: Checking Source & Col N: Elapsed Time)
+  if (sheet.getLastColumn() < HEADERS.length || sheet.getRange(1, 14).getValue() !== 'Elapsed Time') {
     const headerRange = sheet.getRange(1, 1, 1, HEADERS.length);
     headerRange.setValues([HEADERS]);
     headerRange.setFontWeight('bold');
     headerRange.setBackground('#1e293b');
     headerRange.setFontColor('#ffffff');
     headerRange.setHorizontalAlignment('center');
-    sheet.setColumnWidth(13, 150);
+    sheet.setColumnWidth(13, 150); // Checking Source
+    sheet.setColumnWidth(14, 120); // Elapsed Time
+    sheet.getRange(2, 14, Math.max(lastRow - 1, 1), 1).setNumberFormat('@');
   }
   
   // Read entire data range into memory
@@ -409,8 +464,17 @@ function checkPredictions() {
       values[i][12] = checkingSource;
     }
     
-    // Rule: Skip rows that are already completed (Right or Checking: No)
-    if (status === 'Right' || checking.toLowerCase() === 'no') {
+    // If already marked Right: ensure Elapsed Time is filled, then skip
+    if (status === 'Right') {
+      if (!row[13] && row[9]) {
+        values[i][13] = formatElapsedTime(row[1], row[9]);
+      }
+      continue;
+    }
+    
+    // If checking is marked No (and not Right), ensure Elapsed Time is blank, then skip
+    if (checking.toLowerCase() === 'no') {
+      values[i][13] = '';
       continue;
     }
     
@@ -422,6 +486,7 @@ function checkPredictions() {
       values[i][10] = 'No';
       values[i][11] = '72h Expired';
       values[i][7] = nowFormatted; // Update last checked time
+      values[i][13] = ''; // Blank if Wrong/Expired
       expiredCount++;
       newlyExpiredRows.push(rowIndex);
       Logger.log('[Row ' + rowIndex + '] ' + rawSymbol + ': 72 hours crossed (' + ageHours.toFixed(1) + 'h) -> Checking marked No.');
@@ -529,17 +594,20 @@ function checkPredictions() {
     values[i][12] = resolvedSource; // Column M: Checking Source
     
     if (isRight) {
+      const finalRightTime = rightTimestamp || nowFormatted;
       values[i][8] = 'Right';
-      values[i][9] = rightTimestamp || nowFormatted;
+      values[i][9] = finalRightTime;
       values[i][10] = 'No'; // Stop checking once target is reached!
       values[i][11] = 'Target Reached';
+      values[i][13] = formatElapsedTime(row[1], finalRightTime); // Column N: Elapsed Time
       rightCount++;
       newlyRightRows.push(rowIndex);
-      Logger.log('[Row ' + rowIndex + '] ' + rawSymbol + ' TARGET HIT! Right at ' + (rightTimestamp || nowFormatted) + ' (High: $' + currentHigh + ', Source: ' + resolvedSource + ')');
+      Logger.log('[Row ' + rowIndex + '] ' + rawSymbol + ' TARGET HIT! Right at ' + finalRightTime + ' (Elapsed: ' + values[i][13] + ', High: $' + currentHigh + ', Source: ' + resolvedSource + ')');
     } else {
       values[i][8] = 'Wrong';
       values[i][10] = 'Yes';
       values[i][11] = errorMessage ? errorMessage : 'Active';
+      values[i][13] = ''; // Blank if Wrong
     }
     
     // Polite 100ms pause to prevent burst rate limits
@@ -555,6 +623,7 @@ function checkPredictions() {
     const rowNum = newlyRightRows[r];
     sheet.getRange(rowNum, 9).setFontWeight('bold').setFontColor('#22c55e'); // Green
     sheet.getRange(rowNum, 11).setFontWeight('normal').setFontColor('#94a3b8'); // Gray for No
+    sheet.getRange(rowNum, 14).setNumberFormat('@'); // Plain text for Elapsed Time
   }
   for (let e = 0; e < newlyExpiredRows.length; e++) {
     const rowNum = newlyExpiredRows[e];
@@ -858,8 +927,7 @@ function parseTimestamp(cellVal, fallbackMs) {
 
 /**
  * 6. Quick Test Function
- * Select and run this in Apps Script to verify live tickers and 5m candles,
- * demonstrating Binance Futures priority for USELESS, FARTCOIN, PENGU, MARSCOIN, XMR, BTC, etc.
+ * Run this in Apps Script to test live tickers, 5m candle fetches, and formatElapsedTime.
  */
 function testConnection() {
   Logger.log('--- Testing Multi-Exchange Live Tickers (Binance Futures Priority #1) ---');
@@ -880,6 +948,12 @@ function testConnection() {
     }
     Logger.log(sym + ' -> Price: $' + price + ' | Checking Source: ' + src);
   }
+  
+  Logger.log('--- Testing formatElapsedTime ---');
+  Logger.log('45m elapsed: ' + formatElapsedTime('2026-09-20 10:00:00 IST', '2026-09-20 10:45:00 IST') + ' [Expected: 00:45]');
+  Logger.log('2h 15m elapsed: ' + formatElapsedTime('2026-09-20 10:00:00 IST', '2026-09-20 12:15:00 IST') + ' [Expected: 02:15]');
+  Logger.log('26h 05m elapsed: ' + formatElapsedTime('2026-09-20 10:00:00 IST', '2026-09-21 12:05:00 IST') + ' [Expected: 26:05]');
+  Logger.log('Wrong status (blank rightAt): "' + formatElapsedTime('2026-09-20 10:00:00 IST', '') + '" [Expected: ""]');
   
   Logger.log('--- Testing 5m Candle Fetch for USELESS & XMR ---');
   const now = new Date().getTime();
