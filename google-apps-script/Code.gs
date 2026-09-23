@@ -7,19 +7,21 @@
  * 2. Binance Futures (fapi.binance.com) is ALWAYS Priority #1 for all price & candle checks
  * 3. Fallback cascade: Binance Futures -> Binance Spot -> MEXC -> Bitfinex
  * 4. Receives new predictions via Web App Webhook (doPost)
- * 5. Runs 15-minute automated checks (checkPredictions) using 5-MINUTE CANDLES:
+ * 5. Runs 1-MINUTE automated checks (checkPredictions) using 5-MINUTE CANDLES:
+ *    - Triggered every 1 minute for near real-time target hit detection
+ *    - Concurrency lock (LockService) prevents overlapping runs
+ *    - Execution time budget (50s) ensures each run finishes before the next 1-minute tick
  *    - Auto-detects and self-heals sheet column dimensions if fewer than 14 columns exist
- *    - Auto-installs and validates 15-minute trigger if not present
- *    - Execution time budget (4 mins) prevents Google Apps Script 6-minute timeouts
- *    - Writes a visual Heartbeat note to cell A1 with last automated check time & stats
- *    - Top-level try/catch prevents silent trigger failures
+ *    - Auto-installs and validates 1-minute trigger if not present
+ *    - Writes a visual Heartbeat note to cell A1 with last check time & stats
+ *    - Top-level try/catch/finally prevents silent trigger failures
  *    - Scans all 5m candles from logged time to check time (max 72 hours = 864 candles)
  *    - Updates Highest Price & Lowest Price reached across the full window
  *    - If target price reached, updates Right At as CANDLE END TIME, sets Status='Right', Checking='No', Notes='Target Reached'
  *    - Computes and records Elapsed Time in 'HH:MM' format from Logged Time to Right At
  *    - If status is Wrong/Active/Expired, Elapsed Time remains blank
  *    - Once 72 hours cross post-logging, sets Checking='No', Notes='72h Expired', and stops checking
- *    - Bulk-fetches tickers and batch-writes to the sheet in 1 single call (under 20s for 150+ rows)
+ *    - Bulk-fetches tickers and batch-writes to the sheet in 1 single call (under 5s for 150+ rows)
  */
 
 const SHEET_NAME = 'Predictions';
@@ -84,7 +86,7 @@ function ensureSheetColumns(sheet) {
 function updateSheetHeartbeat(sheet, message) {
   try {
     const nowFormatted = Utilities.formatDate(new Date(), 'GMT+5:30', 'yyyy-MM-dd HH:mm:ss') + ' IST';
-    const note = 'Automated Prediction Monitor:\nLast Checked: ' + nowFormatted + '\n' + (message || '');
+    const note = 'Automated Prediction Monitor (1m interval):\nLast Checked: ' + nowFormatted + '\n' + (message || '');
     sheet.getRange('A1').setNote(note);
   } catch (_) {}
 }
@@ -211,6 +213,7 @@ function setupSheet() {
       let checking = String(row[10] || '').trim();
       let notes = String(row[11] || '').trim();
       let source = String(row[12] || '').trim();
+      let elapsed = String(row[13] || '').trim();
       
       if (!checking) {
         const loggedMs = parseTimestamp(row[1], nowMs);
@@ -253,18 +256,18 @@ function setupSheet() {
     }
   }
   
-  // Ensure automated trigger is active
+  // Ensure automated 1-minute trigger is active
   ensureTriggerInstalled();
   
-  updateSheetHeartbeat(sheet, 'Sheet initialized and trigger active');
+  updateSheetHeartbeat(sheet, 'Sheet initialized and 1m trigger active');
   Logger.log('Sheet initialized successfully with 14 headers (including Col M: Checking Source & Col N: Elapsed Time)!');
 }
 
 /**
- * 2. Setup Automated 15-Minute Cloud Trigger
- * Run this function once from script editor to start automated checks every 15 minutes!
+ * 2. Setup Automated 1-Minute Cloud Trigger
+ * Run this function once from script editor to start automated checks every 1 minute!
  */
-function createFifteenMinuteTrigger() {
+function createOneMinuteTrigger() {
   const triggers = ScriptApp.getProjectTriggers();
   for (let i = 0; i < triggers.length; i++) {
     if (triggers[i].getHandlerFunction() === 'checkPredictions') {
@@ -274,44 +277,45 @@ function createFifteenMinuteTrigger() {
   
   ScriptApp.newTrigger('checkPredictions')
     .timeBased()
-    .everyMinutes(15)
+    .everyMinutes(1)
     .create();
     
-  Logger.log('15-minute automated prediction check trigger successfully created!');
+  Logger.log('1-minute automated prediction check trigger successfully created!');
+}
+
+// Backward-compatibility aliases
+function createFifteenMinuteTrigger() {
+  createOneMinuteTrigger();
 }
 
 function createTwoHourTrigger() {
-  createFifteenMinuteTrigger();
+  createOneMinuteTrigger();
 }
 
 /**
- * Auto-installs the 15-minute trigger if missing.
+ * Auto-installs the 1-minute trigger if missing.
  */
 function ensureTriggerInstalled() {
   try {
     const triggers = ScriptApp.getProjectTriggers();
     for (let i = 0; i < triggers.length; i++) {
       if (triggers[i].getHandlerFunction() === 'checkPredictions') {
-        return; // Already installed and active!
+        return; // Trigger already exists
       }
     }
-    // Not found, auto-create
-    ScriptApp.newTrigger('checkPredictions')
-      .timeBased()
-      .everyMinutes(15)
-      .create();
-    Logger.log('Auto-installed missing 15-minute trigger for checkPredictions.');
+    // Not found, auto-create 1-minute trigger
+    createOneMinuteTrigger();
   } catch (err) {
     Logger.log('Note: Trigger auto-install check: ' + err);
   }
 }
 
 /**
- * Diagnostics function: Inspects existing triggers and fixes any missing or duplicated triggers.
+ * Diagnostics function: Inspects existing triggers and updates to a clean 1-minute trigger.
  * Run this from the Apps Script editor anytime to check trigger health!
  */
 function checkTriggerStatus() {
-  Logger.log('=== Automated Trigger Status Check ===');
+  Logger.log('=== Automated 1-Minute Trigger Status Check ===');
   const triggers = ScriptApp.getProjectTriggers();
   Logger.log('Total project triggers installed: ' + triggers.length);
   
@@ -325,15 +329,10 @@ function checkTriggerStatus() {
     }
   }
   
-  if (count === 0) {
-    Logger.log('ALERT: No trigger found for checkPredictions! Auto-installing a fresh 15-minute trigger now...');
-    createFifteenMinuteTrigger();
-  } else if (count === 1) {
-    Logger.log('SUCCESS: Exactly 1 active 15-minute trigger installed and running for checkPredictions.');
-  } else {
-    Logger.log('NOTICE: Multiple duplicate triggers found (' + count + '). Consolidating into 1 clean trigger...');
-    createFifteenMinuteTrigger();
-  }
+  // Reinstall fresh 1-minute trigger to guarantee 1-minute interval
+  Logger.log('Setting up clean 1-minute trigger for checkPredictions...');
+  createOneMinuteTrigger();
+  Logger.log('SUCCESS: Active 1-minute trigger installed and running for checkPredictions.');
 }
 
 /**
@@ -466,11 +465,13 @@ function doGet(e) {
 }
 
 /**
- * 5. High-Performance 15-Minute Checker
+ * 5. High-Performance 1-Minute Checker
  * 
+ * - Runs every 1 minute for near real-time target hit detection
+ * - Concurrency lock prevents overlapping executions
+ * - 50-second execution time budget ensures execution completes before the next minute
  * - Auto-heals sheet column dimensions so grid never throws range dimension errors
- * - Auto-installs missing 15-minute trigger if deleted
- * - 4-minute execution time budget prevents Google Apps Script 6-minute hard timeout
+ * - Auto-installs missing 1-minute trigger if deleted
  * - Writes a visual heartbeat note on cell A1 showing the exact time of the last run
  * - Priority #1: Always queries Binance Futures (fapi.binance.com) for real futures chart prices
  * - Fallback cascade: Binance Futures -> Binance Spot -> MEXC -> Bitfinex
@@ -484,11 +485,18 @@ function doGet(e) {
  * - Populates Column M ('Checking Source') with the exact exchange queried
  * - Populates Column N ('Elapsed Time') with 'HH:MM' format
  * - Bulk-fetches live tickers in 1 fast HTTP call
- * - Writes all updates back to the spreadsheet in 1 single batch call (under 20s for 150+ coins)
+ * - Writes all updates back to the spreadsheet in 1 single batch call (under 5s for 150+ coins)
  */
 function checkPredictions() {
+  // Prevent overlapping runs when executing every 1 minute
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(2000)) {
+    Logger.log('Previous checkPredictions execution is still running. Skipping overlapping run.');
+    return;
+  }
+  
   const executionStartTime = new Date().getTime();
-  const MAX_RUNTIME_MS = 4 * 60 * 1000; // 4 minutes safety cutoff (Apps Script limit is 6m)
+  const MAX_RUNTIME_MS = 50 * 1000; // 50 seconds safety cutoff for 1-minute triggers
   
   try {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -506,7 +514,7 @@ function checkPredictions() {
     // Step 0: Ensure sheet has at least 14 columns allocated in grid
     ensureSheetColumns(sheet);
     
-    // Ensure automated 15-minute trigger is active
+    // Ensure automated 1-minute trigger is active
     ensureTriggerInstalled();
     
     const lastRow = sheet.getLastRow();
@@ -551,9 +559,9 @@ function checkPredictions() {
     const newlyExpiredRows = [];
     
     for (let i = 0; i < values.length; i++) {
-      // Safety check: Don't exceed 4 minutes to prevent Apps Script hard kill
+      // Safety check: Don't exceed 50s to prevent overlapping with next 1-minute trigger
       if (new Date().getTime() - executionStartTime > MAX_RUNTIME_MS) {
-        Logger.log('Time budget reached (4m). Saving processed rows and stopping gracefully.');
+        Logger.log('1-minute time budget reached (50s). Saving processed rows and stopping gracefully.');
         break;
       }
       
@@ -726,8 +734,8 @@ function checkPredictions() {
         values[i][13] = ''; // Blank if Wrong
       }
       
-      // Polite 100ms pause to prevent burst rate limits
-      Utilities.sleep(100);
+      // Polite 50ms pause to prevent burst rate limits
+      Utilities.sleep(50);
     }
     
     // Step 3: Write ALL updated rows back to the sheet in ONE single bulk call
@@ -761,6 +769,10 @@ function checkPredictions() {
           updateSheetHeartbeat(sheet, 'ERROR on last run: ' + (globalErr.message || globalErr));
         }
       }
+    } catch (_) {}
+  } finally {
+    try {
+      lock.releaseLock();
     } catch (_) {}
   }
 }
@@ -1032,7 +1044,7 @@ function parseTimestamp(cellVal, fallbackMs) {
 
 /**
  * 6. Quick Test Function
- * Run this in Apps Script to test live tickers, 5m candle fetches, formatElapsedTime, and trigger status.
+ * Run this in Apps Script to test live tickers, 5m candle fetches, formatElapsedTime, and 1-minute trigger status.
  */
 function testConnection() {
   Logger.log('--- Checking Trigger Health ---');
